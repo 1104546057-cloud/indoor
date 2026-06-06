@@ -1,0 +1,31 @@
+/* 后续功能页面的占位内容，先保持统一的后台页面观感。 */
+.page-placeholder {
+  display: grid;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid #d8e2df;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 38px rgba(16, 24, 32, 0.08);
+}
+
+.page-kicker {
+  margin: 0;
+  color: #23756d;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.page-placeholder h1 {
+  margin: 0;
+  color: #101820;
+  font-size: 32px;
+  line-height: 1.18;
+}
+
+.page-placeholder p {
+  margin: 0;
+  color: #667782;
+  line-height: 1.7;
+}

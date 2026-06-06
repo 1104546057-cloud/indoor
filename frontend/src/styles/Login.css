@@ -1,0 +1,291 @@
+/* 登录页整体布局：左侧品牌信息，右侧登录卡片。 */
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 440px);
+  gap: 48px;
+  align-items: center;
+  padding: 56px;
+  background:
+    linear-gradient(135deg, rgba(25, 112, 100, 0.14), transparent 36%),
+    linear-gradient(315deg, rgba(28, 82, 132, 0.12), transparent 42%),
+    #f4f7f6;
+}
+
+/* 左侧平台介绍区域。 */
+.brand-panel {
+  display: grid;
+  gap: 22px;
+}
+
+.eyebrow,
+.login-kicker {
+  margin: 0;
+  color: #23756d;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  max-width: 720px;
+  color: #101820;
+  font-size: clamp(42px, 6vw, 68px);
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.summary {
+  max-width: 660px;
+  color: #52616b;
+  font-size: 18px;
+  line-height: 1.8;
+}
+
+/* 状态卡片：显示后端 API 当前连接状态。 */
+.status-panel {
+  width: min(520px, 100%);
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 18px 20px;
+  border: 1px solid #d7e2df;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 14px 38px rgba(16, 24, 32, 0.08);
+}
+
+.status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #9aa6ac;
+}
+
+.status-dot.checking {
+  background: #d7a226;
+}
+
+.status-dot.connected {
+  background: #1f9d68;
+}
+
+.status-dot.disconnected {
+  background: #d94a4a;
+}
+
+.status-panel strong {
+  display: block;
+  color: #142129;
+  font-size: 16px;
+}
+
+.status-panel p {
+  margin-top: 4px;
+  color: #667782;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* 右侧登录表单卡片。 */
+.login-card {
+  display: grid;
+  gap: 28px;
+  padding: 34px;
+  border: 1px solid #d8e2df;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 24px 60px rgba(15, 35, 42, 0.14);
+}
+
+.login-header {
+  display: grid;
+  gap: 9px;
+}
+
+.login-header h2 {
+  color: #101820;
+  font-size: 30px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.login-header p {
+  color: #667782;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* 表单输入区域。 */
+.login-form {
+  display: grid;
+  gap: 18px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  color: #26343c;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.field input {
+  width: 100%;
+  height: 46px;
+  border: 1px solid #cbd9d6;
+  border-radius: 8px;
+  padding: 0 14px;
+  color: #142129;
+  background: #fbfdfd;
+  font-size: 15px;
+  outline: none;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+
+.field input:focus {
+  border-color: #23756d;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(35, 117, 109, 0.15);
+}
+
+/* 密码输入框和显示/隐藏按钮放在同一行。 */
+.password-field {
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  align-items: center;
+}
+
+.password-field input {
+  border-radius: 8px 0 0 8px;
+}
+
+.ghost-button {
+  height: 46px;
+  border: 1px solid #cbd9d6;
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  color: #23756d;
+  background: #eef6f4;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* 表单底部的记住登录状态和测试账号提示。 */
+.form-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  color: #667782;
+  font-size: 13px;
+}
+
+.checkbox {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: #34454e;
+  font-weight: 700;
+}
+
+.checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: #23756d;
+}
+
+.hint {
+  text-align: right;
+}
+
+/* 错误提示信息。 */
+.message {
+  min-height: 20px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.error-message {
+  color: #a73434;
+  background: #fff0f0;
+  border: 1px solid #ffd1d1;
+}
+
+/* 登录提交按钮。 */
+.submit-button {
+  height: 48px;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #23756d;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(35, 117, 109, 0.22);
+  transition:
+    background 0.18s ease,
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.submit-button:hover:not(:disabled) {
+  background: #1b625b;
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px rgba(35, 117, 109, 0.25);
+}
+
+.submit-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+/* 平板和手机端改成单列布局。 */
+@media (max-width: 860px) {
+  .login-page {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    align-items: start;
+    padding: 34px 20px;
+  }
+
+  h1 {
+    font-size: 38px;
+  }
+
+  .summary {
+    font-size: 16px;
+  }
+
+  .login-card {
+    padding: 26px;
+  }
+}
+
+/* 极窄屏幕下，表单辅助信息上下排列，避免挤压。 */
+@media (max-width: 480px) {
+  .form-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .hint {
+    text-align: left;
+  }
+}

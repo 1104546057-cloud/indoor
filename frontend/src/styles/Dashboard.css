@@ -1,0 +1,93 @@
+/* 登录后的数据看板页面容器。 */
+.dashboard-page {
+  display: grid;
+  gap: 24px;
+}
+
+/* 看板顶部区域：标题和用户操作。 */
+.dashboard-header {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.dashboard-header .eyebrow {
+  margin: 0;
+  color: #23756d;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.dashboard-header h1 {
+  margin: 8px 0 0;
+  color: #101820;
+  font-size: 36px;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+/* 当前登录用户信息和退出登录按钮。 */
+.user-box {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: #26343c;
+  font-weight: 800;
+}
+
+.user-box button {
+  height: 38px;
+  border: 1px solid #cbd9d6;
+  border-radius: 8px;
+  padding: 0 14px;
+  color: #23756d;
+  background: #ffffff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* 看板指标卡片网格，后续接入真实统计接口。 */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+/* 单个指标卡片。 */
+.metric-card {
+  display: grid;
+  gap: 16px;
+  min-height: 140px;
+  padding: 24px;
+  border: 1px solid #d8e2df;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 38px rgba(16, 24, 32, 0.08);
+}
+
+.metric-card span {
+  color: #667782;
+  font-weight: 700;
+}
+
+.metric-card strong {
+  color: #101820;
+  font-size: 42px;
+  line-height: 1;
+}
+
+/* 小屏幕下改为单列，保证文字和按钮不挤在一起。 */
+@media (max-width: 860px) {
+  .dashboard-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
