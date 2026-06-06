@@ -10,35 +10,85 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 
 
-# 车辆连接配置放在 backend/.env，避免 Nano 地址变化时改代码。
+# 车辆连接配置：多车注册表放在 backend/vehicles.json，全局超时等参数仍放 .env。
 load_dotenv(Path(__file__).with_name('.env'))
 
-VEHICLE_AGENT_BASE_URL = os.getenv(
-    'VEHICLE_AGENT_BASE_URL',
-    'http://192.168.31.139:9000',
-).rstrip('/')
-VEHICLE_CAMERA_STREAM_URL = os.getenv(
-    'VEHICLE_CAMERA_STREAM_URL',
-    'http://192.168.31.139:8080/',
-)
 VEHICLE_REQUEST_TIMEOUT = float(os.getenv('VEHICLE_REQUEST_TIMEOUT', '1.5'))
-VEHICLE_SSH_HOST = os.getenv('VEHICLE_SSH_HOST', '192.168.31.139')
-VEHICLE_SSH_PORT = int(os.getenv('VEHICLE_SSH_PORT', '22'))
-VEHICLE_SSH_USERNAME = os.getenv('VEHICLE_SSH_USERNAME', 'nano1')
-VEHICLE_SSH_PASSWORD = os.getenv('VEHICLE_SSH_PASSWORD', '123456')
-VEHICLE_START_SCRIPT = os.getenv(
-    'VEHICLE_START_SCRIPT',
-    '/home/nano1/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_vehicle_services.sh',
-)
 VEHICLE_START_TIMEOUT = float(os.getenv('VEHICLE_START_TIMEOUT', '8'))
 VEHICLE_CONNECT_RETRIES = int(os.getenv('VEHICLE_CONNECT_RETRIES', '10'))
 VEHICLE_CONNECT_RETRY_DELAY = float(os.getenv('VEHICLE_CONNECT_RETRY_DELAY', '0.8'))
 
+_VEHICLES_FILE = Path(__file__).with_name('vehicles.json')
 
-def _agent_json_request(path: str, method: str = 'GET', payload: dict | None = None):
-    """Call the Nano vehicle_agent HTTP API and return parsed JSON."""
 
-    url = f'{VEHICLE_AGENT_BASE_URL}{path}'
+def _load_registry():
+    """加载多车注册表。
+
+    优先读取 vehicles.json；如果文件不存在，则回退到 .env 中的单车配置，
+    保证旧部署仍可用。
+    """
+
+    if _VEHICLES_FILE.exists():
+        with _VEHICLES_FILE.open('r', encoding='utf-8') as handle:
+            data = json.load(handle)
+        vehicles = {item['id']: item for item in data.get('vehicles', [])}
+        default_id = data.get('default_vehicle_id')
+        if not default_id and vehicles:
+            default_id = next(iter(vehicles))
+        return vehicles, default_id
+
+    # 回退：用旧的 .env 单车变量拼出一台车。
+    fallback = {
+        'id': 'default',
+        'name': '巡检车',
+        'agent_base_url': os.getenv('VEHICLE_AGENT_BASE_URL', 'http://192.168.31.139:9000'),
+        'camera_stream_url': os.getenv('VEHICLE_CAMERA_STREAM_URL', 'http://192.168.31.139:8080/'),
+        'ssh_host': os.getenv('VEHICLE_SSH_HOST', '192.168.31.139'),
+        'ssh_port': int(os.getenv('VEHICLE_SSH_PORT', '22')),
+        'ssh_username': os.getenv('VEHICLE_SSH_USERNAME', 'nano1'),
+        'ssh_password': os.getenv('VEHICLE_SSH_PASSWORD', '123456'),
+        'start_script': os.getenv(
+            'VEHICLE_START_SCRIPT',
+            '/home/nano1/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_vehicle_services.sh',
+        ),
+    }
+    return {'default': fallback}, 'default'
+
+
+_VEHICLES, _DEFAULT_VEHICLE_ID = _load_registry()
+
+
+def list_vehicles():
+    """返回前端用的车辆列表（不含密码等敏感字段）。"""
+
+    items = []
+    for vehicle in _VEHICLES.values():
+        items.append({
+            'id': vehicle['id'],
+            'name': vehicle.get('name', vehicle['id']),
+            'ssh_host': vehicle.get('ssh_host', ''),
+        })
+    return {
+        'default_vehicle_id': _DEFAULT_VEHICLE_ID,
+        'vehicles': items,
+    }
+
+
+def _resolve_vehicle(vehicle_id: str | None):
+    """根据 vehicle_id 找到车辆配置；为空时使用默认车。"""
+
+    target_id = vehicle_id or _DEFAULT_VEHICLE_ID
+    vehicle = _VEHICLES.get(target_id)
+    if vehicle is None:
+        raise HTTPException(status_code=404, detail=f'未找到车辆：{target_id}')
+    return vehicle
+
+
+def _agent_json_request(vehicle, path: str, method: str = 'GET', payload: dict | None = None):
+    """调用指定车辆 Nano 上的 vehicle_agent HTTP API，并返回解析后的 JSON。"""
+
+    base_url = vehicle['agent_base_url'].rstrip('/')
+    url = f'{base_url}{path}'
     data = None
     headers = {'Accept': 'application/json'}
     if payload is not None:
@@ -68,43 +118,48 @@ def _agent_json_request(path: str, method: str = 'GET', payload: dict | None = N
         raise HTTPException(status_code=502, detail='车辆 agent 返回了非 JSON 数据') from error
 
 
-def send_vehicle_command(linear_x: float, angular_z: float, acceleration: float | None = None):
-    """Send a velocity command to the Nano resident agent."""
+def send_vehicle_command(vehicle_id, linear_x, angular_z, acceleration=None):
+    """向指定车辆 Nano 上的常驻 agent 下发速度命令。"""
 
+    vehicle = _resolve_vehicle(vehicle_id)
     payload = {
         'linear_x': linear_x,
         'angular_z': angular_z,
     }
     if acceleration is not None:
         payload['acceleration'] = acceleration
-    return _agent_json_request('/cmd_vel', method='POST', payload=payload)
+    return _agent_json_request(vehicle, '/cmd_vel', method='POST', payload=payload)
 
 
-def stop_vehicle():
-    """Ask the Nano resident agent to publish zero velocity."""
+def stop_vehicle(vehicle_id):
+    """让指定车辆 Nano 上的常驻 agent 发布零速度。"""
 
-    return _agent_json_request('/stop', method='POST')
-
-
-def get_vehicle_status():
-    """Read vehicle agent status, including voltage and odometry when available."""
-
-    return _agent_json_request('/status')
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/stop', method='POST')
 
 
-def get_camera_info():
-    """Return the current camera stream URL used by the frontend."""
+def get_vehicle_status(vehicle_id):
+    """读取指定车辆 agent 状态，包括电压和里程计（如可用）。"""
 
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/status')
+
+
+def get_camera_info(vehicle_id):
+    """返回前端用的指定车辆摄像头流地址。"""
+
+    vehicle = _resolve_vehicle(vehicle_id)
     return {
-        'stream_url': VEHICLE_CAMERA_STREAM_URL,
+        'vehicle_id': vehicle['id'],
+        'stream_url': vehicle['camera_stream_url'],
         'cache': 'no-store',
     }
 
 
-def _check_camera_status():
-    """Check whether the MJPEG service has opened the camera and produced frames."""
+def _check_camera_status(vehicle):
+    """检查指定车辆的 MJPEG 服务是否已经打开摄像头并出帧。"""
 
-    status_url = VEHICLE_CAMERA_STREAM_URL.rstrip('/') + '/status'
+    status_url = vehicle['camera_stream_url'].rstrip('/') + '/status'
     request = Request(status_url, headers={'Accept': 'application/json'}, method='GET')
     try:
         with urlopen(request, timeout=VEHICLE_REQUEST_TIMEOUT) as response:
@@ -114,13 +169,16 @@ def _check_camera_status():
         return {'online': False}
 
 
-def start_vehicle_services():
-    """SSH into the Nano and start both ROS control and camera streaming services."""
+def start_vehicle_services(vehicle_id):
+    """SSH 登录指定车辆 Nano，启动 ROS 控制服务与摄像头流服务。"""
+
+    vehicle = _resolve_vehicle(vehicle_id)
+    start_script = vehicle['start_script']
 
     command = (
         "bash -lc "
         + json.dumps(
-            f'chmod +x {VEHICLE_START_SCRIPT} && {VEHICLE_START_SCRIPT}',
+            f'chmod +x {start_script} && {start_script}',
             ensure_ascii=True,
         )
     )
@@ -130,10 +188,10 @@ def start_vehicle_services():
 
     try:
         client.connect(
-            hostname=VEHICLE_SSH_HOST,
-            port=VEHICLE_SSH_PORT,
-            username=VEHICLE_SSH_USERNAME,
-            password=VEHICLE_SSH_PASSWORD,
+            hostname=vehicle['ssh_host'],
+            port=int(vehicle.get('ssh_port', 22)),
+            username=vehicle['ssh_username'],
+            password=vehicle['ssh_password'],
             timeout=VEHICLE_START_TIMEOUT,
             banner_timeout=VEHICLE_START_TIMEOUT,
             auth_timeout=VEHICLE_START_TIMEOUT,
@@ -159,20 +217,21 @@ def start_vehicle_services():
     camera_status = {'online': False}
     for _index in range(VEHICLE_CONNECT_RETRIES):
         try:
-            agent_status = get_vehicle_status()
+            agent_status = _agent_json_request(vehicle, '/status')
         except HTTPException:
             agent_status = {'online': False}
 
-        camera_status = _check_camera_status()
+        camera_status = _check_camera_status(vehicle)
         if agent_status.get('online') and camera_status.get('has_frame'):
             break
 
         time.sleep(VEHICLE_CONNECT_RETRY_DELAY)
 
     return {
+        'vehicle_id': vehicle['id'],
         'message': '车辆服务启动命令已下发',
         'script_output': output,
         'agent': agent_status,
         'camera': camera_status,
-        'camera_stream_url': VEHICLE_CAMERA_STREAM_URL,
+        'camera_stream_url': vehicle['camera_stream_url'],
     }

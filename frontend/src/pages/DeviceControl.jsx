@@ -36,9 +36,12 @@ function DeviceControl() {
   const [cameraStreamUrl, setCameraStreamUrl] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [activeDirections, setActiveDirections] = useState([])
+  const [vehicles, setVehicles] = useState([])
+  const [selectedVehicleId, setSelectedVehicleId] = useState('')
   const commandLoopRef = useRef(null)
   const heldKeysRef = useRef(new Set())
   const activePointerDirectionRef = useRef(null)
+  const selectedVehicleIdRef = useRef('')
   const latestControlRef = useRef({
     linearSpeed,
     angularSpeed,
@@ -53,6 +56,21 @@ function DeviceControl() {
     }
   }, [linearSpeed, angularSpeed, acceleration])
 
+  // 把当前选中的车辆 id 同步到 ref，供持续控制循环里的闭包读取最新值。
+  useEffect(() => {
+    selectedVehicleIdRef.current = selectedVehicleId
+  }, [selectedVehicleId])
+
+  // 给接口 URL 追加 vehicle_id 查询参数；为空时由后端使用默认车。
+  const withVehicle = useCallback((path) => {
+    const vehicleId = selectedVehicleIdRef.current
+    if (!vehicleId) {
+      return path
+    }
+    const separator = path.includes('?') ? '&' : '?'
+    return `${path}${separator}vehicle_id=${encodeURIComponent(vehicleId)}`
+  }, [])
+
   const cameraUrl = useMemo(() => {
     if (!cameraStreamUrl) {
       return ''
@@ -61,10 +79,10 @@ function DeviceControl() {
     return `${cameraStreamUrl}${separator}t=${Date.now()}`
   }, [cameraStreamUrl])
 
-  const loadVehicleInfo = async (ignore = false) => {
+  const loadVehicleInfo = useCallback(async (ignore = false) => {
       const [cameraResult, statusResult] = await Promise.allSettled([
-          fetch('/api/vehicle/camera', { credentials: 'include' }),
-          fetch('/api/vehicle/status', { credentials: 'include' }),
+          fetch(withVehicle('/api/vehicle/camera'), { credentials: 'include' }),
+          fetch(withVehicle('/api/vehicle/status'), { credentials: 'include' }),
         ])
 
       if (ignore) {
@@ -90,17 +108,55 @@ function DeviceControl() {
       if (!ignore) {
         setVehicleStatus('Nano 未连接')
       }
-  }
+  }, [withVehicle])
 
+  // 进入页面时拉取可选车辆列表，并默认选中后端给出的默认车。
   useEffect(() => {
     let ignore = false
 
-    loadVehicleInfo(ignore)
+    const loadVehicleList = async () => {
+      try {
+        const response = await fetch('/api/vehicles', { credentials: 'include' })
+        if (!response.ok) {
+          return
+        }
+        const data = await response.json()
+        if (ignore) {
+          return
+        }
+        const list = data.vehicles || []
+        setVehicles(list)
+        const defaultId =
+          data.default_vehicle_id || (list.length > 0 ? list[0].id : '')
+        setSelectedVehicleId((current) => current || defaultId)
+      } catch {
+        // 列表拉取失败不阻塞页面，仍可使用默认车。
+      }
+    }
+
+    loadVehicleList()
 
     return () => {
       ignore = true
     }
   }, [])
+
+  // 选中车辆变化时（含首次确定默认车），刷新该车的摄像头与状态。
+  useEffect(() => {
+    if (!selectedVehicleId) {
+      return undefined
+    }
+
+    let ignore = false
+    setCameraStreamUrl('')
+    setVehicleStatus('未连接')
+    setLastCommand('等待下发控制命令')
+    loadVehicleInfo(ignore)
+
+    return () => {
+      ignore = true
+    }
+  }, [selectedVehicleId, loadVehicleInfo])
 
   const connectVehicle = async () => {
     setIsConnecting(true)
@@ -108,7 +164,7 @@ function DeviceControl() {
     setLastCommand('正在启动 Nano 控制和摄像头服务')
 
     try {
-      const response = await fetch('/api/vehicle/connect', {
+      const response = await fetch(withVehicle('/api/vehicle/connect'), {
         method: 'POST',
         credentials: 'include',
       })
@@ -144,6 +200,7 @@ function DeviceControl() {
           linear_x: linearX,
           angular_z: angularZ,
           acceleration: commandAcceleration ?? latestControlRef.current.acceleration,
+          vehicle_id: selectedVehicleIdRef.current || undefined,
         }),
       })
 
@@ -164,7 +221,7 @@ function DeviceControl() {
 
   const sendStopCommand = useCallback(async (label = '停止') => {
     try {
-      const response = await fetch('/api/vehicle/stop', {
+      const response = await fetch(withVehicle('/api/vehicle/stop'), {
         method: 'POST',
         credentials: 'include',
       })
@@ -180,7 +237,7 @@ function DeviceControl() {
       setVehicleStatus('Nano 未连接')
       setLastCommand(error instanceof Error ? error.message : '停止命令下发失败')
     }
-  }, [])
+  }, [withVehicle])
 
   const clearCommandLoop = useCallback(() => {
     if (commandLoopRef.current) {
@@ -333,11 +390,32 @@ function DeviceControl() {
           <p>四驱车手动控制采用前进/后退叠加角速度的方式，实现弧线行驶。</p>
         </div>
         <div className="vehicle-actions">
+          <label className="vehicle-selector">
+            <span>车辆</span>
+            <select
+              value={selectedVehicleId}
+              onChange={(event) => {
+                stopMotion('切换车辆')
+                setSelectedVehicleId(event.target.value)
+              }}
+              disabled={isConnecting || vehicles.length === 0}
+            >
+              {vehicles.length === 0 ? (
+                <option value="">默认车辆</option>
+              ) : (
+                vehicles.map((vehicle) => (
+                  <option key={vehicle.id} value={vehicle.id}>
+                    {vehicle.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
           <button
             type="button"
             className="vehicle-connect-button"
             onClick={connectVehicle}
-            disabled={isConnecting}
+            disabled={isConnecting || !selectedVehicleId}
           >
             {isConnecting ? '连接中' : '连接车'}
           </button>

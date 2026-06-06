@@ -15,6 +15,7 @@ from .models import User
 from .vehicle_client import (
     get_camera_info,
     get_vehicle_status,
+    list_vehicles,
     send_vehicle_command,
     start_vehicle_services,
     stop_vehicle,
@@ -74,9 +75,11 @@ class CurrentUserResponse(BaseModel):
 
 class VehicleControlRequest(BaseModel):
     # 四驱车当前只使用 linear.x 和 angular.z；组合按键也由这两个量叠加实现。
+    # vehicle_id 指定本次命令下发给哪一台车，为空时后端使用默认车。
     linear_x: float = 0.0
     angular_z: float = 0.0
     acceleration: float | None = None
+    vehicle_id: str | None = None
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -184,16 +187,28 @@ async def get_me(current_user: User = Depends(get_current_user)):
     )
 
 
+@app.get("/api/vehicles")
+async def vehicles(current_user: User = Depends(get_current_user)):
+    # 前端用这个接口拉取可选车辆列表，渲染车辆选择下拉框。
+    return list_vehicles()
+
+
 @app.get("/api/vehicle/status")
-async def vehicle_status(current_user: User = Depends(get_current_user)):
-    # 后端只做权限校验和转发，真实车辆状态由 Nano 上的 vehicle_agent 提供。
-    return get_vehicle_status()
+async def vehicle_status(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    # 后端只做权限校验和转发，真实车辆状态由对应 Nano 上的 vehicle_agent 提供。
+    return get_vehicle_status(vehicle_id)
 
 
 @app.post("/api/vehicle/connect")
-async def vehicle_connect(current_user: User = Depends(get_current_user)):
-    # 网页端点击“连接车”时，通过 SSH 启动 Nano 上的控制和摄像头常驻服务。
-    return start_vehicle_services()
+async def vehicle_connect(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    # 网页端点击“连接车”时，通过 SSH 启动所选 Nano 上的控制和摄像头常驻服务。
+    return start_vehicle_services(vehicle_id)
 
 
 @app.post("/api/vehicle/control")
@@ -203,6 +218,7 @@ async def vehicle_control(
 ):
     # 点击方向按钮时调用，后续按住按钮也会持续调用这个接口刷新命令时间。
     return send_vehicle_command(
+        vehicle_id=request.vehicle_id,
         linear_x=request.linear_x,
         angular_z=request.angular_z,
         acceleration=request.acceleration,
@@ -210,12 +226,18 @@ async def vehicle_control(
 
 
 @app.post("/api/vehicle/stop")
-async def vehicle_stop(current_user: User = Depends(get_current_user)):
+async def vehicle_stop(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
     # 停止和急停都先走零速度命令；车端 agent 也有超时自动停车保护。
-    return stop_vehicle()
+    return stop_vehicle(vehicle_id)
 
 
 @app.get("/api/vehicle/camera")
-async def vehicle_camera(current_user: User = Depends(get_current_user)):
+async def vehicle_camera(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
     # 第一版摄像头由 Nano 直接提供 MJPEG，前端拿到地址后用 img 显示。
-    return get_camera_info()
+    return get_camera_info(vehicle_id)

@@ -29,3 +29,6 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# 多车注册表（含 SSH 凭据，按机器实际填写，不入库）。提交模板 vehicles.example.json 即可。
+backend/vehicles.json

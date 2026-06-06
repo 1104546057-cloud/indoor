@@ -1,14 +1,20 @@
-/* 设备控制页内部继续拆分子导航，方便后续接入视频、状态、任务等模块。 */
+/* 设备控制页固定占满一屏（减去 main-content 的 32px 上下内边距），内部用纵向弹性布局，
+   让摄像头/控制区自动填充剩余空间，避免上下滚动。 */
 .device-control-page {
-  display: grid;
-  gap: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: calc(100vh - 64px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .device-control-header {
   display: flex;
   gap: 18px;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .control-kicker {
@@ -21,17 +27,18 @@
 }
 
 .device-control-header h1 {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: #101820;
-  font-size: 36px;
-  line-height: 1.08;
+  font-size: 24px;
+  line-height: 1.1;
 }
 
 .device-control-header p:not(.control-kicker) {
   max-width: 760px;
-  margin: 10px 0 0;
+  margin: 4px 0 0;
   color: #667782;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .vehicle-chip {
@@ -55,6 +62,37 @@
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.vehicle-selector {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  border: 1px solid #cbd9d6;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #ffffff;
+  color: #23756d;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.vehicle-selector select {
+  min-height: 28px;
+  border: none;
+  background: transparent;
+  color: #16433e;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  outline: none;
+}
+
+.vehicle-selector select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .vehicle-connect-button {
@@ -88,6 +126,7 @@
   min-width: 0;
   overflow-x: auto;
   border-bottom: 1px solid #d8e2df;
+  flex-shrink: 0;
 }
 
 .control-tab {
@@ -110,16 +149,18 @@
 
 .control-stage {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 310px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 20px;
   align-items: stretch;
-  min-height: calc(100vh - 230px);
+  flex: 1;
+  min-height: 0;
 }
 
 .camera-stage {
   position: relative;
   overflow: hidden;
-  min-height: 520px;
+  min-height: 0;
+  height: 100%;
   border: 1px solid #101820;
   border-radius: 8px;
   background: #101820;
@@ -137,7 +178,7 @@
   place-items: center;
   width: 100%;
   height: 100%;
-  min-height: 520px;
+  min-height: 0;
   color: #d8e2df;
   font-weight: 800;
 }
@@ -145,11 +186,13 @@
 .teleop-panel {
   display: grid;
   align-content: center;
-  gap: 18px;
+  gap: 14px;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   border: 1px solid #d8e2df;
   border-radius: 8px;
-  padding: 20px;
+  padding: 16px;
   background: #ffffff;
   box-shadow: 0 14px 38px rgba(16, 24, 32, 0.08);
 }
@@ -171,7 +214,7 @@
 
 .vertical-sliders input[type='range'] {
   width: 34px;
-  height: 150px;
+  height: 110px;
   accent-color: #23756d;
   writing-mode: vertical-lr;
   direction: rtl;
@@ -188,9 +231,9 @@
 
 .direction-pad {
   display: grid;
-  grid-template-columns: repeat(3, 76px);
-  grid-template-rows: repeat(3, 58px);
-  gap: 10px;
+  grid-template-columns: repeat(3, 72px);
+  grid-template-rows: repeat(3, 50px);
+  gap: 8px;
   justify-content: center;
 }
 
@@ -244,7 +287,7 @@
 }
 
 .emergency-button {
-  height: 42px;
+  height: 40px;
   border: 1px solid #b72929;
   border-radius: 8px;
   color: #ffffff;
@@ -255,11 +298,10 @@
 
 .command-preview {
   display: grid;
-  gap: 6px;
-  min-height: 78px;
+  gap: 4px;
   border: 1px solid #e0e8e6;
   border-radius: 8px;
-  padding: 12px;
+  padding: 10px;
   background: #f8fbfa;
 }
 
@@ -276,6 +318,13 @@
 }
 
 @media (max-width: 1100px) {
+  /* 窄屏摄像头与控制面板改为上下堆叠，此时不再强制一屏，允许自然滚动以免内容被裁切。 */
+  .device-control-page {
+    height: auto;
+    min-height: calc(100vh - 64px);
+    overflow: visible;
+  }
+
   .control-stage {
     grid-template-columns: 1fr;
   }
@@ -286,6 +335,7 @@
 
   .teleop-panel {
     align-content: start;
+    overflow: visible;
   }
 }
 

@@ -1,0 +1,28 @@
+{
+  "_comment": "多车注册表模板。复制本文件为 backend/vehicles.json 并按实际车辆填写。后端启动时优先读取 vehicles.json；若不存在则回退到 .env 中的单车 VEHICLE_* 配置。新增车辆只需在 vehicles 数组里追加一段。",
+  "default_vehicle_id": "nano1",
+  "vehicles": [
+    {
+      "id": "nano1",
+      "name": "巡检车 nano1",
+      "agent_base_url": "http://192.168.31.139:9000",
+      "camera_stream_url": "http://192.168.31.139:8080/",
+      "ssh_host": "192.168.31.139",
+      "ssh_port": 22,
+      "ssh_username": "nano1",
+      "ssh_password": "在此填写该车的SSH密码",
+      "start_script": "/home/nano1/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_vehicle_services.sh"
+    },
+    {
+      "id": "nano2",
+      "name": "巡检车 nano2",
+      "agent_base_url": "http://192.168.31.80:9000",
+      "camera_stream_url": "http://192.168.31.80:8080/",
+      "ssh_host": "192.168.31.80",
+      "ssh_port": 22,
+      "ssh_username": "nano2",
+      "ssh_password": "在此填写该车的SSH密码",
+      "start_script": "/home/nano2/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_vehicle_services.sh"
+    }
+  ]
+}
