@@ -14,6 +14,7 @@ from .database import get_db
 from .models import User
 from .vehicle_client import (
     get_camera_info,
+    get_lidar_info,
     get_vehicle_status,
     list_vehicles,
     send_vehicle_command,
@@ -241,3 +242,12 @@ async def vehicle_camera(
 ):
     # 第一版摄像头由 Nano 直接提供 MJPEG，前端拿到地址后用 img 显示。
     return get_camera_info(vehicle_id)
+
+
+@app.get("/api/vehicle/lidar")
+async def vehicle_lidar(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    # 雷达由 Nano 上的小桥接服务把 ROS /lidar/scan 转成 WebSocket JSON。
+    return get_lidar_info(vehicle_id)

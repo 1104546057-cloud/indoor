@@ -179,6 +179,22 @@ def get_camera_info(vehicle_id):
     }
 
 
+def get_lidar_info(vehicle_id):
+    """返回前端用的指定车辆雷达 WebSocket 地址。"""
+
+    vehicle = _resolve_vehicle(vehicle_id)
+    ws_url = vehicle.get('lidar_ws_url')
+    if not ws_url:
+        host = vehicle.get('ssh_host', '')
+        ws_url = f'ws://{host}:8090/ws/lidar' if host else ''
+
+    return {
+        'vehicle_id': vehicle['id'],
+        'ws_url': ws_url,
+        'topic': vehicle.get('lidar_topic', '/lidar/scan'),
+    }
+
+
 def _check_camera_status(vehicle):
     """检查指定车辆的 MJPEG 服务是否已经打开摄像头并出帧。"""
 

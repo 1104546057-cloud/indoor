@@ -27,6 +27,86 @@ const keyToDirection = {
 const commandRepeatMs = 160
 const vehiclePollMs = 5000
 const fallbackVehicles = [{ id: '', name: '默认车辆', online: false, status: 'unknown' }]
+const lidarMaxRange = 5
+const lidarDemoPointCount = 100
+
+function buildDemoLidarFrame(tick = 0) {
+  const points = []
+  for (let index = 0; index < lidarDemoPointCount; index += 1) {
+    const angle = -Math.PI + (index / (lidarDemoPointCount - 1)) * Math.PI * 2
+    const corridor = Math.abs(Math.sin(angle)) > 0.72 ? 1.15 : 3.4
+    const frontObstacle = Math.abs(angle) < 0.18 ? 0.8 + Math.sin(tick / 12) * 0.06 : corridor
+    const range = Math.min(corridor, frontObstacle) + Math.sin(index * 0.9 + tick / 8) * 0.03
+    points.push({
+      x: Math.cos(angle) * range,
+      y: Math.sin(angle) * range,
+      range,
+    })
+  }
+  return points
+}
+
+function normalizeLidarFrame(frame) {
+  if (Array.isArray(frame?.points)) {
+    return frame.points
+      .map((point) => ({
+        x: Number(point.x),
+        y: Number(point.y),
+        range: Number(point.range ?? Math.hypot(Number(point.x), Number(point.y))),
+      }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+  }
+
+  if (Array.isArray(frame?.ranges)) {
+    const angleMin = Number(frame.angle_min ?? frame.angleMin ?? -Math.PI)
+    const angleIncrement = Number(
+      frame.angle_increment ?? frame.angleIncrement ?? (Math.PI * 2) / frame.ranges.length,
+    )
+    return frame.ranges
+      .map((range, index) => {
+        const value = Number(range)
+        const angle = angleMin + index * angleIncrement
+        return {
+          x: Math.cos(angle) * value,
+          y: Math.sin(angle) * value,
+          range: value,
+        }
+      })
+      .filter((point) => Number.isFinite(point.range) && point.range > 0.05)
+  }
+
+  return []
+}
+
+function summarizeLidar(points) {
+  const summary = {
+    front: null,
+    left: null,
+    right: null,
+  }
+
+  points.forEach((point) => {
+    const angle = Math.atan2(point.y, point.x)
+    const range = point.range ?? Math.hypot(point.x, point.y)
+    if (!Number.isFinite(range)) {
+      return
+    }
+
+    if (Math.abs(angle) <= Math.PI / 8) {
+      summary.front = summary.front === null ? range : Math.min(summary.front, range)
+    } else if (angle > Math.PI / 8 && angle < (Math.PI * 7) / 8) {
+      summary.left = summary.left === null ? range : Math.min(summary.left, range)
+    } else if (angle < -Math.PI / 8 && angle > (-Math.PI * 7) / 8) {
+      summary.right = summary.right === null ? range : Math.min(summary.right, range)
+    }
+  })
+
+  return summary
+}
+
+function formatDistance(value) {
+  return value === null ? '--' : `${value.toFixed(2)} m`
+}
 
 function DeviceControl() {
   const [activeSection, setActiveSection] = useState('manual')
@@ -36,11 +116,17 @@ function DeviceControl() {
   const [lastCommand, setLastCommand] = useState('等待下发控制命令')
   const [vehicleStatus, setVehicleStatus] = useState('未连接')
   const [cameraStreamUrl, setCameraStreamUrl] = useState('')
+  const [lidarWsUrl, setLidarWsUrl] = useState('')
+  const [lidarStatus, setLidarStatus] = useState('未连接')
+  const [lidarPoints, setLidarPoints] = useState([])
+  const [lidarSummary, setLidarSummary] = useState({ front: null, left: null, right: null })
+  const [isLidarDemo, setIsLidarDemo] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [activeDirections, setActiveDirections] = useState([])
   const [vehicles, setVehicles] = useState(fallbackVehicles)
   const [selectedVehicleId, setSelectedVehicleId] = useState('')
   const commandLoopRef = useRef(null)
+  const lidarCanvasRef = useRef(null)
   const heldKeysRef = useRef(new Set())
   const activePointerDirectionRef = useRef(null)
   const selectedVehicleIdRef = useRef('')
@@ -82,34 +168,38 @@ function DeviceControl() {
   }, [cameraStreamUrl])
 
   const loadVehicleInfo = useCallback(async (ignore = false) => {
-      const [cameraResult, statusResult] = await Promise.allSettled([
-          fetch(withVehicle('/api/vehicle/camera'), { credentials: 'include' }),
-          fetch(withVehicle('/api/vehicle/status'), { credentials: 'include' }),
-        ])
+    const [cameraResult, statusResult, lidarResult] = await Promise.allSettled([
+      fetch(withVehicle('/api/vehicle/camera'), { credentials: 'include' }),
+      fetch(withVehicle('/api/vehicle/status'), { credentials: 'include' }),
+      fetch(withVehicle('/api/vehicle/lidar'), { credentials: 'include' }),
+    ])
 
-      if (ignore) {
-        return
-      }
+    if (ignore) {
+      return
+    }
 
-      if (cameraResult.status === 'fulfilled') {
-        const cameraResponse = cameraResult.value
-        if (!ignore && cameraResponse.ok) {
-          const cameraData = await cameraResponse.json()
-          setCameraStreamUrl(cameraData.stream_url || '')
-        }
+    if (cameraResult.status === 'fulfilled') {
+      const cameraResponse = cameraResult.value
+      if (!ignore && cameraResponse.ok) {
+        const cameraData = await cameraResponse.json()
+        setCameraStreamUrl(cameraData.stream_url || '')
       }
+    }
 
-      if (statusResult.status === 'fulfilled') {
-        const statusResponse = statusResult.value
-        if (!ignore && statusResponse.ok) {
-          setVehicleStatus('Nano 在线')
-          return
-        }
-      }
+    let statusOnline = false
+    if (statusResult.status === 'fulfilled') {
+      const statusResponse = statusResult.value
+      statusOnline = statusResponse.ok
+    }
+    setVehicleStatus(statusOnline ? 'Nano 在线' : 'Nano 未连接')
 
-      if (!ignore) {
-        setVehicleStatus('Nano 未连接')
+    if (lidarResult.status === 'fulfilled') {
+      const lidarResponse = lidarResult.value
+      if (!ignore && lidarResponse.ok) {
+        const lidarData = await lidarResponse.json()
+        setLidarWsUrl(lidarData.ws_url || '')
       }
+    }
   }, [withVehicle])
 
   const loadVehicleList = useCallback(async (ignore = false) => {
@@ -153,6 +243,11 @@ function DeviceControl() {
 
     let ignore = false
     setCameraStreamUrl('')
+    setLidarWsUrl('')
+    setLidarPoints([])
+    setLidarSummary({ front: null, left: null, right: null })
+    setLidarStatus('未连接')
+    setIsLidarDemo(false)
     setVehicleStatus('未连接')
     setLastCommand('等待下发控制命令')
     loadVehicleInfo(ignore)
@@ -196,6 +291,143 @@ function DeviceControl() {
 
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId)
   const selectedVehicleOnline = Boolean(selectedVehicle?.online)
+
+  useEffect(() => {
+    if (!lidarWsUrl) {
+      return undefined
+    }
+
+    let closed = false
+    let demoTimer = null
+    const socket = new WebSocket(lidarWsUrl)
+
+    const startDemo = () => {
+      if (closed || demoTimer) {
+        return
+      }
+      let tick = 0
+      setIsLidarDemo(true)
+      setLidarStatus('雷达桥接未连接，显示演示数据')
+      demoTimer = window.setInterval(() => {
+        tick += 1
+        const points = buildDemoLidarFrame(tick)
+        setLidarPoints(points)
+        setLidarSummary(summarizeLidar(points))
+      }, 160)
+    }
+
+    socket.onopen = () => {
+      if (closed) {
+        return
+      }
+      setIsLidarDemo(false)
+      setLidarStatus('雷达在线')
+    }
+
+    socket.onmessage = (event) => {
+      try {
+        const frame = JSON.parse(event.data)
+        const points = normalizeLidarFrame(frame)
+        if (!points.length) {
+          return
+        }
+        setIsLidarDemo(false)
+        setLidarStatus(`雷达在线：${points.length} 点`)
+        setLidarPoints(points)
+        setLidarSummary(summarizeLidar(points))
+      } catch {
+        setLidarStatus('雷达数据格式错误')
+      }
+    }
+
+    socket.onerror = startDemo
+    socket.onclose = startDemo
+
+    const fallbackTimer = window.setTimeout(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        startDemo()
+      }
+    }, 1600)
+
+    return () => {
+      closed = true
+      window.clearTimeout(fallbackTimer)
+      if (demoTimer) {
+        window.clearInterval(demoTimer)
+      }
+      socket.close()
+    }
+  }, [lidarWsUrl])
+
+  useEffect(() => {
+    const canvas = lidarCanvasRef.current
+    if (!canvas) {
+      return
+    }
+
+    const rect = canvas.getBoundingClientRect()
+    const ratio = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, Math.floor(rect.width * ratio))
+    canvas.height = Math.max(1, Math.floor(rect.height * ratio))
+
+    const context = canvas.getContext('2d')
+    context.setTransform(ratio, 0, 0, ratio, 0, 0)
+    context.clearRect(0, 0, rect.width, rect.height)
+
+    const centerX = rect.width / 2
+    const centerY = rect.height * 0.58
+    const scale = Math.min(rect.width, rect.height) / (lidarMaxRange * 2.25)
+
+    context.fillStyle = '#0f181f'
+    context.fillRect(0, 0, rect.width, rect.height)
+
+    context.strokeStyle = 'rgba(216, 226, 223, 0.18)'
+    context.lineWidth = 1
+    ;[1, 2, 3, 4, 5].forEach((meters) => {
+      context.beginPath()
+      context.arc(centerX, centerY, meters * scale, 0, Math.PI * 2)
+      context.stroke()
+    })
+
+    context.strokeStyle = 'rgba(216, 226, 223, 0.22)'
+    context.beginPath()
+    context.moveTo(centerX, centerY - lidarMaxRange * scale)
+    context.lineTo(centerX, centerY + lidarMaxRange * scale)
+    context.moveTo(centerX - lidarMaxRange * scale, centerY)
+    context.lineTo(centerX + lidarMaxRange * scale, centerY)
+    context.stroke()
+
+    context.fillStyle = isLidarDemo ? '#f0b84f' : '#37c98b'
+    lidarPoints.forEach((point) => {
+      const canvasX = centerX + point.y * scale
+      const canvasY = centerY - point.x * scale
+      if (
+        canvasX < -4 ||
+        canvasX > rect.width + 4 ||
+        canvasY < -4 ||
+        canvasY > rect.height + 4
+      ) {
+        return
+      }
+      context.beginPath()
+      context.arc(canvasX, canvasY, 2, 0, Math.PI * 2)
+      context.fill()
+    })
+
+    context.fillStyle = '#ffffff'
+    context.beginPath()
+    context.moveTo(centerX, centerY - 12)
+    context.lineTo(centerX - 8, centerY + 10)
+    context.lineTo(centerX + 8, centerY + 10)
+    context.closePath()
+    context.fill()
+
+    context.fillStyle = 'rgba(255, 255, 255, 0.72)'
+    context.font = '12px sans-serif'
+    context.fillText('前', centerX - 6, centerY - lidarMaxRange * scale - 8)
+    context.fillText('左', centerX - lidarMaxRange * scale - 16, centerY + 4)
+    context.fillText('右', centerX + lidarMaxRange * scale + 8, centerY + 4)
+  }, [isLidarDemo, lidarPoints])
 
   const sendVehicleCommand = useCallback(async (linearX, angularZ, label, commandAcceleration) => {
     try {
@@ -447,13 +679,31 @@ function DeviceControl() {
       </nav>
 
       <div className="control-stage">
-        <section className="camera-stage" aria-label="摄像头实时画面">
-          {cameraUrl ? (
-            <img src={cameraUrl} alt="无人车摄像头实时画面" />
-          ) : (
-            <div className="camera-placeholder">等待摄像头地址</div>
-          )}
-        </section>
+        <div className="sensor-stage">
+          <section className="camera-stage" aria-label="摄像头实时画面">
+            {cameraUrl ? (
+              <img src={cameraUrl} alt="无人车摄像头实时画面" />
+            ) : (
+              <div className="camera-placeholder">等待摄像头地址</div>
+            )}
+          </section>
+
+          <section className="lidar-stage" aria-label="雷达二维点云">
+            <div className="lidar-header">
+              <div>
+                <span>2D LiDAR</span>
+                <strong>{lidarStatus}</strong>
+              </div>
+              <small>{isLidarDemo ? '演示数据' : '/lidar/scan'}</small>
+            </div>
+            <canvas ref={lidarCanvasRef} aria-label="二维雷达点云画布" />
+            <div className="lidar-metrics">
+              <span>前方 {formatDistance(lidarSummary.front)}</span>
+              <span>左侧 {formatDistance(lidarSummary.left)}</span>
+              <span>右侧 {formatDistance(lidarSummary.right)}</span>
+            </div>
+          </section>
+        </div>
 
         <aside className="teleop-panel" aria-label="无人车手动控制">
           <div className="vertical-sliders">
