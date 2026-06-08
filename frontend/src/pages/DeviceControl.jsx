@@ -25,6 +25,8 @@ const keyToDirection = {
 }
 
 const commandRepeatMs = 160
+const vehiclePollMs = 5000
+const fallbackVehicles = [{ id: '', name: '默认车辆', online: false, status: 'unknown' }]
 
 function DeviceControl() {
   const [activeSection, setActiveSection] = useState('manual')
@@ -36,7 +38,7 @@ function DeviceControl() {
   const [cameraStreamUrl, setCameraStreamUrl] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [activeDirections, setActiveDirections] = useState([])
-  const [vehicles, setVehicles] = useState([])
+  const [vehicles, setVehicles] = useState(fallbackVehicles)
   const [selectedVehicleId, setSelectedVehicleId] = useState('')
   const commandLoopRef = useRef(null)
   const heldKeysRef = useRef(new Set())
@@ -110,36 +112,38 @@ function DeviceControl() {
       }
   }, [withVehicle])
 
-  // 进入页面时拉取可选车辆列表，并默认选中后端给出的默认车。
+  const loadVehicleList = useCallback(async (ignore = false) => {
+    try {
+      const response = await fetch('/api/vehicles', { credentials: 'include' })
+      if (!response.ok || ignore) {
+        return
+      }
+      const data = await response.json()
+      if (ignore) {
+        return
+      }
+      const list = data.vehicles?.length ? data.vehicles : fallbackVehicles
+      setVehicles(list)
+      const defaultId = data.default_vehicle_id || (list.length > 0 ? list[0].id : '')
+      setSelectedVehicleId((current) => current || defaultId)
+    } catch {
+      // 列表拉取失败不阻塞页面，仍可使用后端默认车。
+      setVehicles(fallbackVehicles)
+    }
+  }, [])
+
+  // 进入页面时拉取车辆列表，并周期刷新在线/离线状态。
   useEffect(() => {
     let ignore = false
 
-    const loadVehicleList = async () => {
-      try {
-        const response = await fetch('/api/vehicles', { credentials: 'include' })
-        if (!response.ok) {
-          return
-        }
-        const data = await response.json()
-        if (ignore) {
-          return
-        }
-        const list = data.vehicles || []
-        setVehicles(list)
-        const defaultId =
-          data.default_vehicle_id || (list.length > 0 ? list[0].id : '')
-        setSelectedVehicleId((current) => current || defaultId)
-      } catch {
-        // 列表拉取失败不阻塞页面，仍可使用默认车。
-      }
-    }
-
-    loadVehicleList()
+    loadVehicleList(ignore)
+    const timer = window.setInterval(() => loadVehicleList(ignore), vehiclePollMs)
 
     return () => {
       ignore = true
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [loadVehicleList])
 
   // 选中车辆变化时（含首次确定默认车），刷新该车的摄像头与状态。
   useEffect(() => {
@@ -189,6 +193,9 @@ function DeviceControl() {
       setIsConnecting(false)
     }
   }
+
+  const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId)
+  const selectedVehicleOnline = Boolean(selectedVehicle?.online)
 
   const sendVehicleCommand = useCallback(async (linearX, angularZ, label, commandAcceleration) => {
     try {
@@ -398,29 +405,29 @@ function DeviceControl() {
                 stopMotion('切换车辆')
                 setSelectedVehicleId(event.target.value)
               }}
-              disabled={isConnecting || vehicles.length === 0}
+              disabled={isConnecting}
             >
-              {vehicles.length === 0 ? (
-                <option value="">默认车辆</option>
-              ) : (
-                vehicles.map((vehicle) => (
-                  <option key={vehicle.id} value={vehicle.id}>
-                    {vehicle.name}
-                  </option>
-                ))
-              )}
+              {vehicles.map((vehicle) => (
+                <option key={vehicle.id || 'default'} value={vehicle.id}>
+                  {vehicle.name} {vehicle.online ? '在线' : '离线'}
+                </option>
+              ))}
             </select>
           </label>
           <button
             type="button"
             className="vehicle-connect-button"
             onClick={connectVehicle}
-            disabled={isConnecting || !selectedVehicleId}
+            disabled={isConnecting}
           >
             {isConnecting ? '连接中' : '连接车'}
           </button>
           <div className="vehicle-chip">
-            <span className="vehicle-status-dot" />
+            <span
+              className={`vehicle-status-dot ${
+                selectedVehicleOnline ? 'online' : 'offline'
+              }`}
+            />
             {vehicleStatus}
           </div>
         </div>

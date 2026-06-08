@@ -120,6 +120,14 @@
   background: #2fb36d;
 }
 
+.vehicle-status-dot.online {
+  background: #2fb36d;
+}
+
+.vehicle-status-dot.offline {
+  background: #a8b5b2;
+}
+
 .control-tabs {
   display: flex;
   gap: 8px;

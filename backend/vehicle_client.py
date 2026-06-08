@@ -59,19 +59,42 @@ _VEHICLES, _DEFAULT_VEHICLE_ID = _load_registry()
 
 
 def list_vehicles():
-    """返回前端用的车辆列表（不含密码等敏感字段）。"""
+    """返回前端用的车辆列表（不含密码等敏感字段），并附带独立在线状态。"""
 
     items = []
     for vehicle in _VEHICLES.values():
+        status = _probe_vehicle_status(vehicle)
         items.append({
             'id': vehicle['id'],
             'name': vehicle.get('name', vehicle['id']),
             'ssh_host': vehicle.get('ssh_host', ''),
+            'online': status['online'],
+            'status': status['status'],
+            'voltage': status.get('voltage'),
+            'error': status.get('error'),
         })
     return {
         'default_vehicle_id': _DEFAULT_VEHICLE_ID,
         'vehicles': items,
     }
+
+
+def _probe_vehicle_status(vehicle):
+    """轻量探测单台车是否在线；失败只标记该车离线，不抛出影响其他车辆。"""
+
+    try:
+        status = _agent_json_request(vehicle, '/status')
+        return {
+            'online': bool(status.get('online')),
+            'status': 'online' if status.get('online') else 'offline',
+            'voltage': status.get('voltage'),
+        }
+    except HTTPException as error:
+        return {
+            'online': False,
+            'status': 'offline',
+            'error': str(error.detail),
+        }
 
 
 def _resolve_vehicle(vehicle_id: str | None):
