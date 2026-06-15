@@ -156,8 +156,14 @@
   min-height: 0;
 }
 
+.control-stage-full {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .camera-stage {
   position: relative;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   min-height: 0;
   height: 100%;
@@ -166,10 +172,99 @@
   background: #101820;
 }
 
+.camera-source-label {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(16, 24, 32, 0.92);
+}
+
+.camera-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(16, 24, 32, 0.92);
+}
+
+.camera-toolbar label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #d8e2df;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.camera-toolbar select,
+.camera-apply-button {
+  min-height: 32px;
+  border: 1px solid #3d4d58;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #1a242d;
+  color: #f4f7f6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.camera-quality input {
+  width: 120px;
+}
+
+.camera-apply-button {
+  cursor: pointer;
+  background: #23756d;
+  border-color: #23756d;
+}
+
+.camera-capture-button {
+  min-height: 32px;
+  border: 1px solid #d4a017;
+  border-radius: 6px;
+  padding: 0 12px;
+  background: #c99200;
+  color: #fffaf0;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.camera-capture-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.camera-apply-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.camera-actual {
+  color: #9eb4ad;
+  font-size: 12px;
+  font-weight: 700;
+  align-self: center;
+}
+
+.vehicle-dual-tag {
+  margin-left: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e8f4f1;
+  color: #23756d;
+  font-size: 11px;
+}
+
 .camera-stage img {
   display: block;
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   object-fit: contain;
 }
 
@@ -177,7 +272,7 @@
   display: grid;
   place-items: center;
   width: 100%;
-  height: 100%;
+  flex: 1;
   min-height: 0;
   color: #d8e2df;
   font-weight: 800;
@@ -315,6 +410,27 @@
   color: #101820;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.section-placeholder {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #d8e2df;
+  border-radius: 8px;
+  padding: 24px;
+  background: #ffffff;
+}
+
+.section-placeholder h2 {
+  margin: 0 0 8px;
+  color: #101820;
+  font-size: 20px;
+}
+
+.section-placeholder p {
+  margin: 4px 0;
+  color: #667782;
+  font-size: 14px;
 }
 
 @media (max-width: 1100px) {

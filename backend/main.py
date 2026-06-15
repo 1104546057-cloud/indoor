@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 from .database import get_db
 from .models import User
 from .vehicle_client import (
+    apply_camera_settings,
+    capture_recognition_photo,
     get_camera_info,
+    get_movement_camera_info,
     get_vehicle_status,
     list_vehicles,
     send_vehicle_command,
@@ -80,6 +83,14 @@ class VehicleControlRequest(BaseModel):
     angular_z: float = 0.0
     acceleration: float | None = None
     vehicle_id: str | None = None
+
+
+class CameraSettingsRequest(BaseModel):
+    vehicle_id: str | None = None
+    width: int
+    height: int
+    fps: int
+    jpeg_quality: int = 95
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -234,10 +245,51 @@ async def vehicle_stop(
     return stop_vehicle(vehicle_id)
 
 
+@app.get("/api/vehicle/movement-camera")
+async def vehicle_movement_camera(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    # 手动控制页：运动板辅助摄像头 MJPEG 地址。
+    return get_movement_camera_info(vehicle_id)
+
+
 @app.get("/api/vehicle/camera")
 async def vehicle_camera(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
-    # 第一版摄像头由 Nano 直接提供 MJPEG，前端拿到地址后用 img 显示。
+    # 目标识别页：4K 摄像头 MJPEG 地址、参数与支持的分辨率档位。
     return get_camera_info(vehicle_id)
+
+
+@app.post("/api/vehicle/camera/settings")
+async def vehicle_camera_settings(
+    request: CameraSettingsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    # 运行时调整摄像头分辨率、帧率和 JPEG 画质。
+    return apply_camera_settings(
+        vehicle_id=request.vehicle_id,
+        width=request.width,
+        height=request.height,
+        fps=request.fps,
+        jpeg_quality=request.jpeg_quality,
+    )
+
+
+@app.post("/api/vehicle/camera/capture")
+async def vehicle_camera_capture(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    # 从 4K 识别摄像头抓取一帧并作为 JPEG 附件下载。
+    image_bytes, content_type = capture_recognition_photo(vehicle_id)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    vehicle_suffix = vehicle_id or 'vehicle'
+    filename = f'capture_{vehicle_suffix}_{timestamp}.jpg'
+    return Response(
+        content=image_bytes,
+        media_type=content_type,
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )

@@ -9,7 +9,7 @@ export default defineConfig({
     proxy: {
       // 前端请求 /api 会被 Vite 转发到 FastAPI 后端，避免浏览器跨域问题。
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8001',
         changeOrigin: true,
       },
     },

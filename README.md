@@ -6,25 +6,27 @@
 - `frontend/`：React + Vite 前端工程
 - `docs/`：项目文档
 
-平台支持**多台无人车（nano1、nano2…）的选择与远程控制**：在设备控制页右上角下拉选择车辆，点击“连接车”后即可对所选车辆进行实时控制并查看其摄像头画面。新增车辆只需在配置文件里追加一段，无需改代码。
+平台支持**多台无人车（nano1、nano2、nano3…）的选择与远程控制**：在设备控制页选择车辆，点击“连接车”后即可对所选车辆进行实时控制并查看摄像头画面。新增车辆只需在配置文件里追加一段，无需改代码。
+
+**nano1 双板架构**：运动板负责底盘控制与辅助摄像头，识别板负责 4K 识别摄像头；连接时会分别 SSH 到两块 Nano 启动对应服务。
 
 ## 后端启动
 
-后端使用相对导入，需在**项目根目录**以模块方式启动（不要进入 `backend/` 再运行）。请使用你本地已装好依赖的 Python 环境（示例用 conda 环境的 `python.exe`）：
+后端使用相对导入，需在**项目根目录**以模块方式启动（不要进入 `backend/` 再运行）。请使用你本地已装好依赖的 Python 环境：
 
 ```powershell
 # 1) 安装依赖
 python -m pip install -r backend/requirements.txt
 
-# 2) 在项目根目录启动后端
-python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+# 2) 在项目根目录启动后端（端口需与 frontend/vite.config.js 中 proxy 一致）
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 启动后可访问：
 
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/docs`
-- `http://127.0.0.1:8000/api/health`
+- `http://127.0.0.1:8001/`
+- `http://127.0.0.1:8001/docs`
+- `http://127.0.0.1:8001/api/health`
 
 ## 环境变量配置
 
@@ -57,18 +59,36 @@ copy backend\vehicles.example.json backend\vehicles.json
 
 ```jsonc
 {
-  "default_vehicle_id": "nano1",        // 默认选中的车辆
+  "default_vehicle_id": "nano1",
   "vehicles": [
     {
-      "id": "nano1",                     // 车辆唯一标识
-      "name": "巡检车 nano1",            // 下拉框显示名称
-      "agent_base_url": "http://<IP>:9000",     // Nano 常驻控制 agent
-      "camera_stream_url": "http://<IP>:8080/", // Nano 摄像头 MJPEG 流
-      "ssh_host": "<IP>",
+      "id": "nano1",
+      "name": "巡检车 nano1（双板）",
+      "agent_base_url": "http://<运动板IP>:9000",
+      "movement_camera_stream_url": "http://<运动板IP>:8080/",
+      "camera_stream_url": "http://<识别板IP>:8080/",
+      "ssh_host": "<运动板IP>",
       "ssh_port": 22,
       "ssh_username": "nano1",
+      "ssh_password": "<运动板SSH密码>",
+      "start_script": "/home/nano1/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_movement_services.sh",
+      "camera_ssh_host": "<识别板IP>",
+      "camera_ssh_port": 22,
+      "camera_ssh_username": "nano1camera",
+      "camera_ssh_password": "<识别板SSH密码>",
+      "camera_start_script": "/home/nano1camera/camera_preview/start_camera_services.sh",
+      "camera_defaults": { "width": 3840, "height": 2160, "fps": 30, "jpeg_quality": 95 }
+    },
+    {
+      "id": "nano2",
+      "name": "巡检车 nano2",
+      "agent_base_url": "http://<IP>:9000",
+      "camera_stream_url": "http://<IP>:8080/",
+      "ssh_host": "<IP>",
+      "ssh_port": 22,
+      "ssh_username": "nano2",
       "ssh_password": "<该车SSH密码>",
-      "start_script": "/home/nano1/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_vehicle_services.sh"
+      "start_script": "/home/nano2/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_vehicle_services.sh"
     }
     // 新增车辆：在数组里再追加一段即可
   ]
@@ -76,6 +96,18 @@ copy backend\vehicles.example.json backend\vehicles.json
 ```
 
 若 `vehicles.json` 不存在，后端会自动回退到 `.env` 中的单车 `VEHICLE_*` 配置。
+
+修改 `vehicles.json` 后需**重启后端**，配置在启动时加载。
+
+### 常见网络场景（nano1 双板 IP 示例）
+
+| 场景 | 运动板 IP | 识别板 IP | 说明 |
+|------|-----------|-----------|------|
+| 实验室 WiFi | `192.168.31.139` | `192.168.31.200` | 电脑与两块 Nano 连同一实验室网络 |
+| MiFi 实地 | `192.168.1.10` | `192.168.1.11` | 电脑与 Nano 连同一 MiFi |
+| 手机热点 | `10.178.84.10` | `10.178.84.11` | 按手机热点实际网段填写，网关以 `ipconfig` 为准 |
+
+**前提**：电脑与两块 Nano 必须处于同一局域网，且 IP 与 `vehicles.json` 一致。
 
 ## 前端启动
 
@@ -87,7 +119,7 @@ npm install
 npm run dev
 ```
 
-启动后访问 `http://localhost:5173/`。前端已配置 Vite 代理，`/api/*` 请求会转发到 `http://127.0.0.1:8000`。
+启动后访问 `http://localhost:5173/`。前端已配置 Vite 代理，`/api/*` 请求会转发到 `http://127.0.0.1:8001`。
 
 ## 车端（Jetson Nano）准备
 
@@ -98,13 +130,35 @@ npm run dev
 - 串口 udev 规则，使底盘控制板（CH340，`1a86:55d4`）映射为 `/dev/dlrobot_controller`
 - 用户加入 `dialout` 组（串口）与 `video` 组（摄像头）
 
-网页点击“连接车”后，后端会 SSH 登录该车并执行 `start_vehicle_services.sh`，自动拉起 ROS 控制服务（端口 9000）与摄像头 MJPEG 服务（端口 8080）。
+**nano1 双板分工**：
+
+| 板子 | 用户 | 职责 | 端口 |
+|------|------|------|------|
+| 运动板 | `nano1` | 底盘 agent + 运动辅助摄像头 | 9000 / 8080 |
+| 识别板 | `nano1camera` | 4K 识别摄像头 MJPEG | 8080 |
+
+网页点击“连接车”后，后端会 SSH 登录对应 Nano 并执行启动脚本，拉起控制与摄像头服务。
+
+**nano2 / nano3（单板）**：一块 Nano 同时承担控制与摄像头，使用 `start_vehicle_services.sh` 即可。
+
+## 设备控制页功能
+
+- **手动控制**：方向键 / 键盘控制底盘，查看运动板辅助摄像头
+- **目标识别**：查看识别板 4K 摄像头，支持分辨率/帧率/画质调节与单帧抓拍下载
+- **急停**：发送零速度命令，车端 agent 也有超时自动停车保护
 
 ## 联调验证
 
 1. 启动 MySQL，并完成数据库初始化。
-2. 在项目根目录启动后端服务。
-3. 启动前端服务。
-4. 打开 `http://localhost:5173/`，使用 `admin` / `123456` 登录。
-5. 进入“设备控制”页，右上角下拉选择车辆（nano1 / nano2 / nano3）→ 点击“连接车”。
-6. 连接成功后可看到该车摄像头画面，并用网页方向键或键盘方向键进行实时控制。
+2. 确认电脑与目标车辆处于同一网络，且 `vehicles.json` IP 正确。
+3. 在项目根目录启动后端服务（端口 `8001`）。
+4. 启动前端服务。
+5. 打开 `http://localhost:5173/`，使用 `admin` / `123456` 登录。
+6. 进入“设备控制”页，选择车辆 → 点击“连接车”。
+7. 连接成功后检查运动摄像头、识别摄像头、底盘控制与急停。
+
+### 常见问题
+
+- **登录后无法控制 / 连接异常**：可能是 Cookie 过期，清空浏览器缓存后重新登录；或在浏览器控制台执行 `localStorage.clear(); sessionStorage.clear(); location.href='/login';`
+- **改了 vehicles.json 不生效**：重启 uvicorn 后端进程。
+- **后端端口被占用**：检查 `netstat -ano | findstr ":8001"`，结束旧进程后重新启动。
