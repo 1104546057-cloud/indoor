@@ -1,0 +1,29 @@
+{
+  "_comment": "手机热点场景模板。复制为 backend/vehicles.json 后按实际热点网段修改 IP 与密码。网关可用电脑连热点后 ipconfig 查看。",
+  "default_vehicle_id": "nano1",
+  "vehicles": [
+    {
+      "id": "nano1",
+      "name": "巡检车 nano1（双板 · 手机热点）",
+      "agent_base_url": "http://10.178.84.10:9000",
+      "movement_camera_stream_url": "http://10.178.84.10:8080/",
+      "camera_stream_url": "http://10.178.84.11:8080/",
+      "ssh_host": "10.178.84.10",
+      "ssh_port": 22,
+      "ssh_username": "nano1",
+      "ssh_password": "在此填写运动板SSH密码",
+      "start_script": "/home/nano1/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/start_movement_services.sh",
+      "camera_ssh_host": "10.178.84.11",
+      "camera_ssh_port": 22,
+      "camera_ssh_username": "nano1camera",
+      "camera_ssh_password": "在此填写识别板SSH密码",
+      "camera_start_script": "/home/nano1camera/camera_preview/start_camera_services.sh",
+      "camera_defaults": {
+        "width": 3840,
+        "height": 2160,
+        "fps": 30,
+        "jpeg_quality": 95
+      }
+    }
+  ]
+}

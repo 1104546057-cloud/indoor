@@ -99,6 +99,24 @@ copy backend\vehicles.example.json backend\vehicles.json
 
 修改 `vehicles.json` 后需**重启后端**，配置在启动时加载。
 
+### 按场景快速复制注册表
+
+仓库提供多套场景模板，按当前网络环境复制其一为 `vehicles.json` 并填写 SSH 密码：
+
+```powershell
+# 通用模板（需自行填 IP）
+copy backend\vehicles.example.json backend\vehicles.json
+
+# 实验室 WiFi（192.168.31.x）
+copy backend\vehicles.lab.json backend\vehicles.json
+
+# MiFi 实地（192.168.1.x）
+copy backend\vehicles.mifi.json backend\vehicles.json
+
+# 手机热点（按模板网段修改 IP）
+copy backend\vehicles.hotspot.json backend\vehicles.json
+```
+
 ### 常见网络场景（nano1 双板 IP 示例）
 
 | 场景 | 运动板 IP | 识别板 IP | 说明 |
@@ -109,7 +127,38 @@ copy backend\vehicles.example.json backend\vehicles.json
 
 **前提**：电脑与两块 Nano 必须处于同一局域网，且 IP 与 `vehicles.json` 一致。
 
-## 前端启动
+切换 Nano 网络（MiFi / 手机热点）可使用 `backend/tools/` 下的配置脚本，详见 `backend/tools/README.md`。
+
+## 从 Git 克隆后的完整启动流程
+
+```powershell
+git clone https://github.com/1104546057-cloud/indoor.git
+cd indoor
+
+# 1. 后端依赖
+python -m pip install -r backend/requirements.txt
+
+# 2. 环境变量
+copy backend\.env.example backend\.env
+# 编辑 backend\.env 填写 MySQL 与本机配置
+
+# 3. 初始化数据库（首次）
+python -m backend.init_db
+
+# 4. 车辆注册表（按场景选一个）
+copy backend\vehicles.lab.json backend\vehicles.json
+# 编辑 vehicles.json 填写 SSH 密码
+
+# 5. 启动后端（项目根目录）
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8001
+
+# 6. 启动前端（新终端）
+cd frontend
+npm install
+npm run dev
+```
+
+浏览器访问 `http://localhost:5173/`，登录 `admin` / `123456` 后即可使用。
 
 需要先安装 Node.js，并确保 `node`、`npm` 可在终端中使用：
 
