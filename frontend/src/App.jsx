@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
 import MainLayout from './layouts/MainLayout'
@@ -7,9 +8,34 @@ import Dashboard from './pages/Dashboard'
 import DeviceControl from './pages/DeviceControl'
 import DeviceManagement from './pages/DeviceManagement'
 import Login from './pages/Login'
+import PatrolExecution3D from './pages/PatrolExecution3D'
 import UserManagement from './pages/UserManagement'
 
 function App() {
+  useEffect(() => {
+    const blockedEvents = ['copy', 'cut', 'paste', 'contextmenu', 'selectstart', 'dragstart']
+    const preventDefault = (event) => event.preventDefault()
+    const preventShortcut = (event) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      const key = event.key.toLowerCase()
+      if (['a', 'c', 'v', 'x'].includes(key)) {
+        event.preventDefault()
+      }
+    }
+
+    blockedEvents.forEach((eventName) => {
+      window.addEventListener(eventName, preventDefault, true)
+    })
+    window.addEventListener('keydown', preventShortcut, true)
+
+    return () => {
+      blockedEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, preventDefault, true)
+      })
+      window.removeEventListener('keydown', preventShortcut, true)
+    }
+  }, [])
+
   return (
     <Routes>
       {/* 登录页使用独立布局，不显示后台侧边栏。 */}
@@ -30,6 +56,7 @@ function App() {
         <Route path="users" element={<UserManagement />} />
         <Route path="devices" element={<DeviceManagement />} />
         <Route path="device-control" element={<DeviceControl />} />
+        <Route path="patrol-3d" element={<PatrolExecution3D />} />
         <Route path="cluster" element={<ClusterManagement />} />
         <Route path="cluster-control" element={<ClusterControl />} />
       </Route>

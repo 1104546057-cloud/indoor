@@ -154,6 +154,45 @@ def send_vehicle_command(vehicle_id, linear_x, angular_z, acceleration=None):
     return _agent_json_request(vehicle, '/cmd_vel', method='POST', payload=payload)
 
 
+def send_navigation_goal(vehicle_id, goal):
+    """Forward a map-frame navigation goal to the selected vehicle agent."""
+
+    vehicle = _resolve_vehicle(vehicle_id)
+    path = vehicle.get('navigation_goal_path', '/navigation_goal')
+    return _agent_json_request(vehicle, path, method='POST', payload=goal)
+
+
+def send_navigation_route(vehicle_id, route):
+    """Forward an ordered list of map-frame navigation goals to the selected vehicle agent."""
+
+    vehicle = _resolve_vehicle(vehicle_id)
+    path = vehicle.get('navigation_route_path', '/navigation_route')
+    try:
+        return _agent_json_request(vehicle, path, method='POST', payload=route)
+    except HTTPException as error:
+        if error.status_code not in {404, 405, 501, 502}:
+            raise
+
+        goal_path = vehicle.get('navigation_goal_path', '/navigation_goal')
+        goal_results = []
+        for index, goal in enumerate(route.get('goals', []), start=1):
+            goal_payload = {
+                **goal,
+                'route_index': index,
+                'route_total': len(route.get('goals', [])),
+            }
+            goal_results.append(_agent_json_request(vehicle, goal_path, method='POST', payload=goal_payload))
+
+        return {
+            'message': 'route endpoint unavailable; sent goals one by one',
+            'fallback': 'navigation_goal',
+            'vehicle_id': vehicle['id'],
+            'task_id': route.get('task_id'),
+            'goal_count': len(goal_results),
+            'results': goal_results,
+        }
+
+
 def stop_vehicle(vehicle_id):
     """让指定车辆 Nano 上的常驻 agent 发布零速度。"""
 
@@ -172,11 +211,31 @@ def get_camera_info(vehicle_id):
     """返回前端用的指定车辆摄像头流地址。"""
 
     vehicle = _resolve_vehicle(vehicle_id)
+    stream_path = f"/api/vehicle/camera/stream?vehicle_id={vehicle['id']}"
     return {
         'vehicle_id': vehicle['id'],
-        'stream_url': vehicle['camera_stream_url'],
+        'stream_url': stream_path,
+        'source_stream_url': vehicle['camera_stream_url'],
         'cache': 'no-store',
     }
+
+
+def open_camera_stream(vehicle_id):
+    """打开指定车辆摄像头 MJPEG 流，供 FastAPI 以同源代理方式转发。"""
+
+    vehicle = _resolve_vehicle(vehicle_id)
+    request = Request(
+        vehicle['camera_stream_url'],
+        headers={
+            'Accept': 'multipart/x-mixed-replace,image/*,*/*',
+            'Cache-Control': 'no-cache',
+        },
+        method='GET',
+    )
+    try:
+        return urlopen(request, timeout=VEHICLE_REQUEST_TIMEOUT)
+    except (HTTPError, URLError, TimeoutError) as error:
+        raise HTTPException(status_code=503, detail=f'无法连接摄像头视频流：{error}') from error
 
 
 def get_lidar_info(vehicle_id):

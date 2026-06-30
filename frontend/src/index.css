@@ -1,7 +1,6 @@
-:root {
-  /* 全局字体和基础配色，所有页面默认继承这里的设置。 */
-  color: #172026;
-  background: #f4f7f6;
+﻿:root {
+  color: #dff7fb;
+  background: #071b25;
   font-family:
     Inter, "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
@@ -14,11 +13,27 @@
 * {
   /* 让元素宽高计算包含 padding 和 border，布局更容易控制。 */
   box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+::selection {
+  background: transparent;
+}
+
+img,
+svg,
+canvas {
+  -webkit-user-drag: none;
+  user-drag: none;
 }
 body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+  background: #071b25;
 }
 
 button,
@@ -26,4 +41,111 @@ input,
 textarea,
 select {
   font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+/* Shared cyan-blue cockpit skin for legacy management pages. */
+.main-content :is(.page, .users-page, .device-page, .devices-page, .cluster-page, .cluster-control-page, .page-placeholder) {
+  color: #dff7fb;
+}
+
+.main-content :is(h1, h2, h3) {
+  color: #f4fbfc;
+}
+
+.main-content :is(.eyebrow, .page-kicker, .section-kicker) {
+  color: #8ee2ef;
+}
+
+.main-content :is(.card, .panel, .table-card, .form-card, .empty-card, .placeholder-card, .management-card, .cluster-card, .device-card) {
+  border: 1px solid rgba(142, 226, 239, .24);
+  border-radius: 8px;
+  color: #dff7fb;
+  background:
+    linear-gradient(135deg, rgba(142, 226, 239, .08), transparent 48%),
+    linear-gradient(180deg, rgba(6, 48, 72, .88), rgba(3, 18, 38, .94));
+  box-shadow: inset 0 0 24px rgba(142, 226, 239, .05), 0 16px 44px rgba(0, 0, 0, .22);
+}
+
+.main-content :is(table, thead, tbody, tr, td, th) {
+  border-color: rgba(142, 226, 239, .16);
+}
+
+.main-content :is(th, label, .label) {
+  color: #8fcbd8;
+}
+
+.main-content :is(td, p, small, .muted, .description) {
+  color: #a8cbd3;
+}
+
+.main-content :is(input, textarea, select) {
+  border: 1px solid rgba(142, 226, 239, .24);
+  border-radius: 8px;
+  color: #eaffff;
+  background: rgba(4, 33, 52, .78);
+  outline: none;
+}
+
+.main-content :is(input, textarea, select):focus {
+  border-color: #8ee2ef;
+  box-shadow: 0 0 0 3px rgba(142, 226, 239, .12);
+}
+
+.main-content select option {
+  color: #102634;
+}
+
+.main-content :is(.primary-button, .submit-button, .save-button, .add-button, button[type='submit']) {
+  border-color: #8ee2ef;
+  color: #06202a;
+  background: linear-gradient(90deg, #8ee2ef, #58b9d4);
+  box-shadow: 0 0 16px rgba(142, 226, 239, .22);
+}
+
+.main-content :is(.secondary-button, .ghost-button, .cancel-button) {
+  border-color: rgba(142, 226, 239, .28);
+  color: #dff7fb;
+  background: rgba(4, 42, 62, .72);
+}
+
+.main-content :is(.danger-button, .delete-button) {
+  border-color: rgba(255, 102, 120, .55);
+  color: #ff9aa8;
+  background: rgba(111, 24, 43, .32);
+}
+
+/* Shared soft cyan-blue tone. */
+:root {
+  color: #d8f1f6;
+  background: #0a2230;
+}
+
+body {
+  background: #0a2230;
+}
+
+.main-content :is(.eyebrow, .page-kicker, .section-kicker) {
+  color: #9edfea;
+}
+
+.main-content :is(.card, .panel, .table-card, .form-card, .empty-card, .placeholder-card, .management-card, .cluster-card, .device-card) {
+  border-color: rgba(158, 223, 234, .22);
+  background:
+    linear-gradient(135deg, rgba(158, 223, 234, .07), transparent 50%),
+    linear-gradient(180deg, rgba(18, 68, 86, .78), rgba(9, 35, 51, .88));
+  box-shadow: inset 0 0 18px rgba(158, 223, 234, .04), 0 12px 30px rgba(0, 0, 0, .16);
+}
+
+.main-content :is(.primary-button, .submit-button, .save-button, .add-button, button[type='submit']) {
+  border-color: #9edfea;
+  background: linear-gradient(90deg, #9edfea, #75bfd2);
+  box-shadow: 0 0 12px rgba(158, 223, 234, .16);
 }

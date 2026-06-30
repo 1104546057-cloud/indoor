@@ -6,21 +6,41 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from .database import get_db
-from .models import User
-from .vehicle_client import (
-    get_camera_info,
-    get_lidar_info,
-    get_vehicle_status,
-    list_vehicles,
-    send_vehicle_command,
-    start_vehicle_services,
-    stop_vehicle,
-)
+try:
+    from .database import get_db
+    from .models import RecognitionResult, User
+    from .vehicle_client import (
+        get_camera_info,
+        get_lidar_info,
+        get_vehicle_status,
+        list_vehicles,
+        open_camera_stream,
+        send_navigation_goal,
+        send_navigation_route,
+        send_vehicle_command,
+        start_vehicle_services,
+        stop_vehicle,
+    )
+except ImportError:
+    from database import get_db
+    from models import RecognitionResult, User
+    from vehicle_client import (
+        get_camera_info,
+        get_lidar_info,
+        get_vehicle_status,
+        list_vehicles,
+        open_camera_stream,
+        send_navigation_goal,
+        send_navigation_route,
+        send_vehicle_command,
+        start_vehicle_services,
+        stop_vehicle,
+    )
 
 
 # 读取 backend/.env 中的 JWT 配置。
@@ -46,6 +66,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -81,6 +103,62 @@ class VehicleControlRequest(BaseModel):
     angular_z: float = 0.0
     acceleration: float | None = None
     vehicle_id: str | None = None
+
+
+class NavigationGoalRequest(BaseModel):
+    vehicle_id: str | None = None
+    task_id: str | None = None
+    point_id: str | None = None
+    point_name: str | None = None
+    frame_id: str = 'map'
+    x: float
+    y: float
+    yaw: float = 0.0
+    source: dict | None = None
+
+
+class NavigationRouteRequest(BaseModel):
+    vehicle_id: str | None = None
+    task_id: str | None = None
+    goals: list[NavigationGoalRequest]
+
+
+class RecognitionResultCreate(BaseModel):
+    # NX 推理节点上报的 AI 识别结果。字段尽量做成可选，方便先离线联调。
+    task_id: str | None = None
+    taskId: str | None = None
+    robot_id: str | None = None
+    robotId: str | None = None
+    room_code: str | None = None
+    roomCode: str | None = None
+    cabinet_code: str | None = None
+    cabinetCode: str | None = None
+    point_id: str | None = None
+    pointId: str | None = None
+    item_code: str | None = None
+    itemCode: str | None = None
+    target_name: str | None = None
+    targetName: str | None = None
+    recognition_type: str | None = None
+    recognitionType: str | None = None
+    value: str | None = None
+    recognition_value: str | None = None
+    recognition_state: str | None = None
+    unit: str | None = None
+    standard_range: str | None = None
+    standardRange: str | None = None
+    confidence: float | None = None
+    status: str | None = None
+    image_url: str | None = None
+    imageUrl: str | None = None
+    captured_at: datetime | None = None
+    capturedAt: datetime | None = None
+
+
+class RecognitionReviewRequest(BaseModel):
+    review_status: str
+    review_remark: str | None = None
+    reviewed_by: str | None = None
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -188,14 +266,155 @@ async def get_me(current_user: User = Depends(get_current_user)):
     )
 
 
+def _pick(payload: RecognitionResultCreate, snake_name: str, camel_name: str | None = None):
+    """同时兼容 snake_case 和 camelCase 入参，方便 NX 脚本和前端共用。"""
+
+    snake_value = getattr(payload, snake_name, None)
+    if snake_value is not None:
+        return snake_value
+    return getattr(payload, camel_name, None) if camel_name else None
+
+
+def _serialize_recognition_result(result: RecognitionResult) -> dict:
+    """把 ORM 对象转成前端直接可用的 JSON。"""
+
+    return {
+        'id': str(result.result_id),
+        'resultId': result.result_id,
+        'taskId': result.task_id,
+        'robotId': result.robot_id,
+        'roomCode': result.room_code,
+        'cabinetCode': result.cabinet_code,
+        'pointId': result.point_id,
+        'itemCode': result.item_code,
+        'targetName': result.target_name,
+        'recognitionType': result.recognition_type,
+        'value': result.recognition_value,
+        'recognitionState': result.recognition_state,
+        'unit': result.unit,
+        'standardRange': result.standard_range,
+        'confidence': f'{result.confidence:.1f}%' if result.confidence is not None else '--',
+        'confidenceValue': result.confidence,
+        'status': result.status,
+        'imageUrl': result.image_url,
+        'reviewStatus': result.review_status,
+        'reviewRemark': result.review_remark,
+        'reviewedBy': result.reviewed_by,
+        'reviewedAt': result.reviewed_at.isoformat(sep=' ') if result.reviewed_at else None,
+        'capturedAt': result.captured_at.isoformat(sep=' ') if result.captured_at else None,
+        'createdAt': result.created_at.isoformat(sep=' ') if result.created_at else None,
+        'summary': f'{result.recognition_type or "AI识别"}：{result.recognition_value or "--"}',
+        'visual': 'digital' if result.recognition_type and '数显' in result.recognition_type else 'meter',
+        'rawData': result.raw_data,
+    }
+
+
+@app.post("/api/inference/results")
+@app.post("/api/recognition/results")
+def create_recognition_result(payload: RecognitionResultCreate, db: Session = Depends(get_db)):
+    # 第一版作为内网接收接口，允许 NX 推理节点直接上报；后续可以增加 API Key。
+    raw_payload = payload.model_dump(mode='json')
+    result = RecognitionResult(
+        task_id=_pick(payload, 'task_id', 'taskId'),
+        robot_id=_pick(payload, 'robot_id', 'robotId'),
+        room_code=_pick(payload, 'room_code', 'roomCode'),
+        cabinet_code=_pick(payload, 'cabinet_code', 'cabinetCode'),
+        point_id=_pick(payload, 'point_id', 'pointId'),
+        item_code=_pick(payload, 'item_code', 'itemCode'),
+        target_name=_pick(payload, 'target_name', 'targetName'),
+        recognition_type=_pick(payload, 'recognition_type', 'recognitionType'),
+        recognition_value=payload.recognition_value or payload.value,
+        recognition_state=payload.recognition_state,
+        unit=payload.unit,
+        standard_range=_pick(payload, 'standard_range', 'standardRange'),
+        confidence=payload.confidence,
+        status=payload.status or '正常',
+        image_url=_pick(payload, 'image_url', 'imageUrl'),
+        captured_at=_pick(payload, 'captured_at', 'capturedAt') or datetime.now(),
+        raw_data=raw_payload,
+        review_status='待复核' if (payload.status or '正常') in ['异常', '告警'] else '无需复核',
+    )
+    db.add(result)
+    db.commit()
+    db.refresh(result)
+    return {'message': 'AI识别结果已入库', 'result': _serialize_recognition_result(result)}
+
+
+@app.get("/api/inference/results")
+@app.get("/api/recognition/results")
+def list_recognition_results(
+    limit: int = 50,
+    status: str | None = None,
+    task_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(RecognitionResult)
+    if status:
+        query = query.filter(RecognitionResult.status == status)
+    if task_id:
+        query = query.filter(RecognitionResult.task_id == task_id)
+    results = query.order_by(RecognitionResult.created_at.desc()).limit(min(max(limit, 1), 200)).all()
+    return {'results': [_serialize_recognition_result(result) for result in results]}
+
+
+@app.get("/api/inference/latest")
+@app.get("/api/recognition/latest")
+def latest_recognition_result(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = db.query(RecognitionResult).order_by(RecognitionResult.created_at.desc()).first()
+    return {'result': _serialize_recognition_result(result) if result else None}
+
+
+@app.get("/api/inference/summary")
+@app.get("/api/recognition/summary")
+def recognition_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    all_results = db.query(RecognitionResult).all()
+    total = len(all_results)
+    abnormal = len([item for item in all_results if item.status in ['异常', '告警']])
+    pending = len([item for item in all_results if item.review_status == '待复核'])
+    normal = len([item for item in all_results if item.status == '正常'])
+    return {
+        'total': total,
+        'normal': normal,
+        'abnormal': abnormal,
+        'pendingReview': pending,
+        'successRate': round(normal / total * 100, 1) if total else 0,
+    }
+
+
+@app.post("/api/recognition/results/{result_id}/review")
+def review_recognition_result(
+    result_id: int,
+    payload: RecognitionReviewRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = db.query(RecognitionResult).filter(RecognitionResult.result_id == result_id).first()
+    if result is None:
+        raise HTTPException(status_code=404, detail='识别结果不存在')
+    result.review_status = payload.review_status
+    result.review_remark = payload.review_remark
+    result.reviewed_by = payload.reviewed_by or current_user.nickname or current_user.username
+    result.reviewed_at = datetime.now()
+    db.commit()
+    db.refresh(result)
+    return {'message': '复核结果已更新', 'result': _serialize_recognition_result(result)}
+
+
 @app.get("/api/vehicles")
-async def vehicles(current_user: User = Depends(get_current_user)):
+def vehicles(current_user: User = Depends(get_current_user)):
     # 前端用这个接口拉取可选车辆列表，渲染车辆选择下拉框。
     return list_vehicles()
 
 
 @app.get("/api/vehicle/status")
-async def vehicle_status(
+def vehicle_status(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
@@ -204,7 +423,7 @@ async def vehicle_status(
 
 
 @app.post("/api/vehicle/connect")
-async def vehicle_connect(
+def vehicle_connect(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
@@ -213,7 +432,7 @@ async def vehicle_connect(
 
 
 @app.post("/api/vehicle/control")
-async def vehicle_control(
+def vehicle_control(
     request: VehicleControlRequest,
     current_user: User = Depends(get_current_user),
 ):
@@ -226,8 +445,53 @@ async def vehicle_control(
     )
 
 
+@app.post("/api/vehicle/navigation-goal")
+def vehicle_navigation_goal(
+    request: NavigationGoalRequest,
+    current_user: User = Depends(get_current_user),
+):
+    goal = {
+        'frame_id': request.frame_id,
+        'x': request.x,
+        'y': request.y,
+        'yaw': request.yaw,
+        'task_id': request.task_id,
+        'point_id': request.point_id,
+        'point_name': request.point_name,
+        'source': request.source,
+    }
+    return send_navigation_goal(request.vehicle_id, goal)
+
+
+@app.post("/api/vehicle/navigation-route")
+def vehicle_navigation_route(
+    request: NavigationRouteRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not request.goals:
+        raise HTTPException(status_code=400, detail='navigation route requires at least one goal')
+
+    route = {
+        'task_id': request.task_id,
+        'goals': [
+            {
+                'frame_id': goal.frame_id,
+                'x': goal.x,
+                'y': goal.y,
+                'yaw': goal.yaw,
+                'task_id': goal.task_id or request.task_id,
+                'point_id': goal.point_id,
+                'point_name': goal.point_name,
+                'source': goal.source,
+            }
+            for goal in request.goals
+        ],
+    }
+    return send_navigation_route(request.vehicle_id, route)
+
+
 @app.post("/api/vehicle/stop")
-async def vehicle_stop(
+def vehicle_stop(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
@@ -236,7 +500,7 @@ async def vehicle_stop(
 
 
 @app.get("/api/vehicle/camera")
-async def vehicle_camera(
+def vehicle_camera(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
@@ -244,8 +508,37 @@ async def vehicle_camera(
     return get_camera_info(vehicle_id)
 
 
+@app.get("/api/vehicle/camera/stream")
+def vehicle_camera_stream(
+    vehicle_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    # 浏览器可能拦截直接访问 Nano 私网 IP 的 MJPEG 图片流，因此这里转成同源代理流。
+    source = open_camera_stream(vehicle_id)
+
+    def iter_stream():
+        try:
+            while True:
+                chunk = source.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            source.close()
+
+    return StreamingResponse(
+        iter_stream(),
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    )
+
+
 @app.get("/api/vehicle/lidar")
-async def vehicle_lidar(
+def vehicle_lidar(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
