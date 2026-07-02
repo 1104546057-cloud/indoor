@@ -117,6 +117,60 @@ function toScenePoint(point, mapData) {
   )
 }
 
+function mapPoseToModelPoint(pose, mapData) {
+  const slamMap = mapData?.slamMap
+  if (!pose || !slamMap?.coverage || !slamMap?.imageSize || !slamMap?.yaml) {
+    return null
+  }
+
+  const [originX, originY] = slamMap.yaml.origin
+  const resolution = slamMap.yaml.resolution
+  const pixelX = (pose.x - originX) / resolution
+  const pixelY = slamMap.imageSize.height - ((pose.y - originY) / resolution)
+  const normalizedX = slamMap.transform?.flipX ? 1 - (pixelX / slamMap.imageSize.width) : pixelX / slamMap.imageSize.width
+  const normalizedY = slamMap.transform?.flipY ? 1 - (pixelY / slamMap.imageSize.height) : pixelY / slamMap.imageSize.height
+
+  return {
+    x: slamMap.coverage.x + normalizedX * slamMap.coverage.width,
+    y: slamMap.coverage.y + normalizedY * slamMap.coverage.depth,
+    yaw: pose.yaw ?? 0,
+  }
+}
+
+function quaternionToYaw(orientation) {
+  if (!orientation || orientation.z === undefined || orientation.w === undefined) {
+    return null
+  }
+
+  const x = Number(orientation.x || 0)
+  const y = Number(orientation.y || 0)
+  const z = Number(orientation.z)
+  const w = Number(orientation.w)
+  if (![x, y, z, w].every(Number.isFinite)) return null
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+}
+
+function readVehiclePose(status, mapData) {
+  const pose = status?.pose?.position || status?.pose || status?.position || status?.odom?.pose?.pose?.position
+  if (!pose) return null
+
+  const orientation = status?.orientation || status?.pose?.orientation || status?.odom?.pose?.pose?.orientation
+  const yaw = status?.yaw ?? status?.theta ?? status?.pose?.yaw ?? orientation?.yaw ?? quaternionToYaw(orientation)
+  const rawPose = {
+    x: Number(pose.x),
+    y: Number(pose.y),
+    yaw: Number.isFinite(Number(yaw)) ? Number(yaw) : 0,
+  }
+  if (!Number.isFinite(rawPose.x) || !Number.isFinite(rawPose.y)) return null
+
+  const modelPoint = mapPoseToModelPoint(rawPose, mapData)
+  return {
+    ...rawPose,
+    modelPoint,
+    receivedAt: Date.now(),
+  }
+}
+
 function addBoxEdges(scene, mesh, color = 0x77ddea) {
   const edges = new THREE.EdgesGeometry(mesh.geometry)
   const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.48 }))
@@ -127,22 +181,30 @@ function addBoxEdges(scene, mesh, color = 0x77ddea) {
 function PatrolExecution3D() {
   const mountRef = useRef(null)
   const pausedRef = useRef(false)
+  const vehiclePoseRef = useRef(null)
   const [isPaused, setIsPaused] = useState(false)
   const [viewMode, setViewMode] = useState('free')
   const [currentIndex, setCurrentIndex] = useState(0)
   const [routeProgress, setRouteProgress] = useState(0)
   const [inspectionPhase, setInspectionPhase] = useState(movingPhase)
   const [completedResults, setCompletedResults] = useState({})
+  const [vehicleTelemetry, setVehicleTelemetry] = useState(null)
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const task = location.state || {}
+  const isReplayMode = Boolean(task.replayMode)
   const sceneMap = task.sceneId === 'lab-building' ? labBuildingMap : hanlinRoomMap
   const pointIds = useMemo(() => (
     task.pointIds?.length ? task.pointIds : sceneMap.inspectionPoints.map((point) => point.id)
   ), [sceneMap.inspectionPoints, task.pointIds])
-  const currentPoint = allInspectionPointById[pointIds[currentIndex]] || allInspectionPointById[pointIds[0]]
-  const nextPoint = allInspectionPointById[pointIds[(currentIndex + 1) % pointIds.length]] || currentPoint
+  const executionRoutePoints = useMemo(() => (
+    task.routePoints?.length
+      ? task.routePoints
+      : pointIds.map((pointId) => allInspectionPointById[pointId]).filter(Boolean)
+  ), [pointIds, task.routePoints])
+  const currentPoint = executionRoutePoints[currentIndex] || executionRoutePoints[0]
+  const nextPoint = executionRoutePoints[(currentIndex + 1) % executionRoutePoints.length] || currentPoint
   const previewResult = getRecognitionResult(currentPoint)
   const currentResult = completedResults[currentPoint?.id] || previewResult
   const evidenceImage = getEvidenceImage(currentPoint, currentResult)
@@ -163,18 +225,20 @@ function PatrolExecution3D() {
   const abnormalRecords = Object.values(completedResults).filter((result) => result.status !== 'normal')
   const vehicleStatus = useMemo(() => {
     const moving = inspectionPhase.key === 'moving' && !isPaused
-    const battery = Math.max(38, 82 - Math.floor(routeProgress / 4))
-    const voltage = (24.6 - routeProgress * 0.012).toFixed(1)
+    const status = vehicleTelemetry?.status || {}
+    const battery = status.battery ?? status.battery_percent ?? Math.max(38, 82 - Math.floor(routeProgress / 4))
+    const voltage = status.voltage ?? (24.6 - routeProgress * 0.012).toFixed(1)
+    const speed = Number.parseFloat(status.speed ?? status.linear_speed ?? (moving ? 0.2 : 0))
 
     return {
       name: task.robot || 'nano1',
       online: isPaused ? '暂停待命' : '在线',
-      speed: moving ? '0.8 m/s' : '0.0 m/s',
+      speed: `${Number.isFinite(speed) ? speed.toFixed(1) : '0.0'} m/s`,
       battery: `${battery}%`,
       voltage: `${voltage} V`,
       signal: routeProgress > 78 ? '良好' : '正常',
     }
-  }, [inspectionPhase.key, isPaused, routeProgress, task.robot])
+  }, [inspectionPhase.key, isPaused, routeProgress, task.robot, vehicleTelemetry])
   const executionLogs = useMemo(() => {
     const logs = [
       { time: '08:30:00', type: '任务', text: `${task.taskName || '巡检任务'} 已载入，执行车辆 ${task.robot || 'nano1'}` },
@@ -201,6 +265,36 @@ function PatrolExecution3D() {
   useEffect(() => {
     pausedRef.current = isPaused
   }, [isPaused])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadVehicleStatus = async () => {
+      try {
+        const response = await fetch(`/api/vehicle/status?vehicle_id=${encodeURIComponent(task.robot || 'nano1')}`, {
+          credentials: 'include',
+        })
+        const status = await response.json()
+        if (!response.ok || cancelled) return
+
+        const nextPose = readVehiclePose(status, sceneMap)
+        vehiclePoseRef.current = nextPose
+        setVehicleTelemetry({ status, pose: nextPose })
+      } catch (error) {
+        if (!cancelled) {
+          vehiclePoseRef.current = null
+        }
+      }
+    }
+
+    loadVehicleStatus()
+    const timer = window.setInterval(loadVehicleStatus, 500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [sceneMap, task.robot])
 
   useEffect(() => {
     const mount = mountRef.current
@@ -279,7 +373,6 @@ function PatrolExecution3D() {
       )
       slab.receiveShadow = true
       scene.add(slab)
-      addBoxEdges(scene, slab, 0x9edfea)
     })
 
     const rampMaterial = new THREE.MeshStandardMaterial({ color: 0x36a8b5, roughness: 0.58 })
@@ -361,26 +454,32 @@ function PatrolExecution3D() {
       })
     })
 
-    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x4f8390, roughness: 0.55, transparent: true, opacity: 0.9 })
+    const wallMaterial = new THREE.MeshStandardMaterial({
+      color: 0x7fcbd8,
+      emissive: 0x0b3440,
+      roughness: 0.58,
+      transparent: true,
+      opacity: 0.34,
+    })
     sceneMap.walls?.forEach((segment) => {
       const dx = (segment.x2 - segment.x1) * SCALE
       const dz = (segment.y2 - segment.y1) * SCALE
       const length = Math.hypot(dx, dz)
-      const height = segment.height * SCALE
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(length, height, segment.thickness * SCALE),
+      const height = Math.min((segment.height || 4000) * SCALE, 4)
+      const thickness = Math.max((segment.thickness || 90) * SCALE, 0.045)
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(length, height, thickness),
         wallMaterial,
       )
-      mesh.position.set(
+      wall.position.set(
         ((segment.x1 + segment.x2) / 2 - sceneMap.size.width / 2) * SCALE,
-        height / 2,
+        height / 2 + 0.14,
         ((segment.y1 + segment.y2) / 2 - sceneMap.size.height / 2) * SCALE,
       )
-      mesh.rotation.y = -Math.atan2(dz, dx)
-      mesh.castShadow = true
-      mesh.receiveShadow = true
-      scene.add(mesh)
-      addBoxEdges(scene, mesh, 0xaeeefa)
+      wall.rotation.y = -Math.atan2(dz, dx)
+      wall.receiveShadow = true
+      scene.add(wall)
+      //addBoxEdges(scene, wall, 0x9edfea)
     })
 
     const cabinetMaterial = new THREE.MeshStandardMaterial({
@@ -428,12 +527,20 @@ function PatrolExecution3D() {
       activeCabinetEdges.set(cabinet.id, activeEdges)
     })
 
-    const routePoints = pointIds.map((id) => allInspectionPointById[id]).filter(Boolean)
+    const routePoints = executionRoutePoints
     const routeVectors = routePoints.map((point) => toScenePoint(point, sceneMap))
     const routeGeometry = new THREE.BufferGeometry().setFromPoints(routeVectors.map((point) => (
       new THREE.Vector3(point.x, 0.07, point.z)
     )))
     scene.add(new THREE.Line(routeGeometry, new THREE.LineBasicMaterial({ color: 0x35f0bd, linewidth: 2 })))
+
+    const trailGeometry = new THREE.BufferGeometry().setFromPoints([])
+    const trailLine = new THREE.Line(
+      trailGeometry,
+      new THREE.LineBasicMaterial({ color: 0xfff275, transparent: true, opacity: 0.82 }),
+    )
+    scene.add(trailLine)
+    const trailPoints = []
 
     const pointMaterial = new THREE.MeshBasicMaterial({ color: 0x9edfea })
     const startMaterial = new THREE.MeshBasicMaterial({ color: 0x35f0bd })
@@ -462,6 +569,13 @@ function PatrolExecution3D() {
     )
     sensor.position.y = 0.42
     car.add(sensor)
+    const heading = new THREE.Mesh(
+      new THREE.ConeGeometry(0.16, 0.34, 3),
+      new THREE.MeshBasicMaterial({ color: 0xfff275 }),
+    )
+    heading.position.set(0, 0.36, 0.46)
+    heading.rotation.x = Math.PI / 2
+    car.add(heading)
     const glow = new THREE.Mesh(
       new THREE.RingGeometry(0.42, 0.58, 36),
       new THREE.MeshBasicMaterial({ color: 0x35f0bd, transparent: true, opacity: 0.32, side: THREE.DoubleSide }),
@@ -501,20 +615,50 @@ function PatrolExecution3D() {
         const t = isDwelling ? 0 : (localTime - DWELL_SECONDS) / TRAVEL_SECONDS
         const current = routeVectors[routeIndex]
         const next = routeVectors[nextIndex]
-        car.position.lerpVectors(current, next, t)
+        const livePose = vehiclePoseRef.current
+        const livePoint = livePose?.modelPoint ? toScenePoint(livePose.modelPoint, sceneMap) : null
+        const usingLivePose = Boolean(livePoint)
+        const shouldReplayRoute = isReplayMode || !task.robot
+        const shouldRenderCar = usingLivePose || shouldReplayRoute
+        const displayRouteIndex = usingLivePose
+          ? routeVectors.reduce((bestIndex, point, index) => (
+            point.distanceTo(livePoint) < routeVectors[bestIndex].distanceTo(livePoint) ? index : bestIndex
+          ), 0)
+          : shouldReplayRoute ? routeIndex : 0
+
+        car.visible = shouldRenderCar
+        trailLine.visible = shouldRenderCar
+
+        if (usingLivePose) {
+          car.position.lerp(livePoint, 0.42)
+        } else if (shouldReplayRoute) {
+          car.position.lerpVectors(current, next, t)
+        } else {
+          car.position.copy(routeVectors[0])
+        }
         car.position.y = 0.08
-        car.rotation.y = Math.atan2(next.x - current.x, next.z - current.z)
+        car.rotation.y = usingLivePose
+          ? (Math.PI / 2 - livePose.yaw)
+          : Math.atan2(next.x - current.x, next.z - current.z)
         glow.material.opacity = isDwelling ? 0.46 + Math.sin(virtualElapsed * 8) * 0.14 : 0.22
         glow.scale.setScalar(isDwelling ? 1.12 + Math.sin(virtualElapsed * 8) * 0.08 : 1)
 
-        const activeCabinetId = routePoints[routeIndex]?.cabinetId
+        const trailPoint = new THREE.Vector3(car.position.x, 0.09, car.position.z)
+        const lastTrailPoint = trailPoints[trailPoints.length - 1]
+        if (shouldRenderCar && (!lastTrailPoint || lastTrailPoint.distanceTo(trailPoint) > 0.05)) {
+          trailPoints.push(trailPoint)
+          if (trailPoints.length > 600) trailPoints.shift()
+          trailGeometry.setFromPoints(trailPoints)
+        }
+
+        const activeCabinetId = routePoints[displayRouteIndex]?.cabinetId
         if (activeCabinetId !== lastActiveCabinetId) {
           activeCabinetEdges.forEach((edge, cabinetId) => {
             edge.visible = cabinetId === activeCabinetId
           })
           lastActiveCabinetId = activeCabinetId
         }
-        const activePoint = routePoints[routeIndex]
+        const activePoint = routePoints[displayRouteIndex]
         const activeResult = getRecognitionResult(activePoint)
         const highlightColor = activeResult.status === 'normal' ? 0xfff275 : 0xff685f
         const pulse = isDwelling ? 0.72 + Math.sin(virtualElapsed * 7) * 0.18 : 0.34
@@ -527,19 +671,23 @@ function PatrolExecution3D() {
         })
 
         pointMarkers.forEach((marker, index) => {
-          marker.material = index === routeIndex ? activePointMaterial : index === 0 ? startMaterial : pointMaterial
-          marker.scale.setScalar(index === routeIndex ? 1.42 + Math.sin(virtualElapsed * 5) * 0.08 : 1)
+          marker.material = index === displayRouteIndex ? activePointMaterial : index === 0 ? startMaterial : pointMaterial
+          marker.scale.setScalar(index === displayRouteIndex ? 1.42 + Math.sin(virtualElapsed * 5) * 0.08 : 1)
         })
         if (viewMode === 'follow') {
           const cameraTarget = new THREE.Vector3(car.position.x - 4.2, 4.4, car.position.z + 4.8)
           camera.position.lerp(cameraTarget, 0.06)
           controls.target.lerp(car.position, 0.08)
         }
-        const nextProgress = Math.round(((routeIndex + (isDwelling ? 0 : t)) / routeVectors.length) * 100)
-        const nextPhase = isDwelling ? getInspectionPhase(localTime / DWELL_SECONDS) : movingPhase
-        if (routeIndex !== lastUiIndex) {
-          lastUiIndex = routeIndex
-          setCurrentIndex(routeIndex)
+        const nextProgress = shouldRenderCar
+          ? Math.round(((displayRouteIndex + (usingLivePose || isDwelling ? 0 : t)) / routeVectors.length) * 100)
+          : 0
+        const nextPhase = shouldRenderCar
+          ? (isDwelling ? getInspectionPhase(localTime / DWELL_SECONDS) : movingPhase)
+          : movingPhase
+        if (displayRouteIndex !== lastUiIndex) {
+          lastUiIndex = displayRouteIndex
+          setCurrentIndex(displayRouteIndex)
         }
         if (nextProgress !== lastUiProgress) {
           lastUiProgress = nextProgress
@@ -549,8 +697,8 @@ function PatrolExecution3D() {
           lastUiPhase = nextPhase.key
           setInspectionPhase(nextPhase)
         }
-        if (nextPhase.key === 'complete' && routePoints[routeIndex]?.id !== lastCompletedPointId) {
-          const completedPoint = routePoints[routeIndex]
+        if (shouldRenderCar && nextPhase.key === 'complete' && routePoints[displayRouteIndex]?.id !== lastCompletedPointId) {
+          const completedPoint = routePoints[displayRouteIndex]
           const recognitionResult = getRecognitionResult(completedPoint)
           const primaryMetric = recognitionResult.metrics[0] || { label: recognitionResult.summary, value: '--' }
           lastCompletedPointId = completedPoint.id
@@ -597,7 +745,7 @@ function PatrolExecution3D() {
       renderer.dispose()
       mount.removeChild(renderer.domElement)
     }
-  }, [pointIds, sceneMap, viewMode])
+  }, [executionRoutePoints, sceneMap, viewMode])
 
   return (
     <section className="patrol-3d-page">

@@ -15,7 +15,6 @@ function Login() {
   const [apiMessage, setApiMessage] = useState('等待响应...')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [rememberMe, setRememberMe] = useState(true)
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -75,14 +74,11 @@ function Login() {
       const data = await response.json()
 
       if (response.ok) {
-        saveUser(
-          {
-            username: data.username,
-            nickname: data.nickname || '管理员',
-            token: data.token,
-          },
-          rememberMe,
-        )
+        saveUser({
+          username: data.username,
+          nickname: data.nickname || '管理员',
+          token: data.token,
+        })
         navigate('/dashboard')
       } else {
         setError(data.detail || '用户名或密码错误')
@@ -176,15 +172,7 @@ function Login() {
             </label>
 
             <div className="login-options">
-              <label className="tech-checkbox">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(event) => setRememberMe(event.target.checked)}
-                />
-                <span className="checkbox-ui"><i /></span>
-                <span>记住登录状态</span>
-              </label>
+              <span>每次打开需重新登录</span>
               <span>默认：admin / 123456</span>
             </div>
 

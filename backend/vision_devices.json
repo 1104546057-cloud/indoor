@@ -1,0 +1,22 @@
+{
+  "default_device_id": "nano1camera",
+  "devices": [
+    {
+      "id": "nano1camera",
+      "name": "Recognition camera nano1camera",
+      "role": "recognition_camera",
+      "camera_base_url": "http://192.168.31.200:8080",
+      "stream_path": "/stream",
+      "status_path": "/status",
+      "detections_path": "/detections",
+      "capture_path": "/capture",
+      "inference_node": {
+        "id": "dai",
+        "name": "dai inference node",
+        "base_url": "http://192.168.31.9:9100",
+        "status_path": "/status",
+        "report_target": "/api/recognition/results"
+      }
+    }
+  ]
+}

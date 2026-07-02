@@ -24,6 +24,8 @@ const allInspectionPointById = {
   ...labInspectionPointById,
 }
 
+const NAVIGATION_SPEED = 0.35
+
 function getSceneMap(sceneId = 'power-room') {
   return sceneMaps[sceneId] || hanlinRoomMap
 }
@@ -247,6 +249,41 @@ function createTaskFromForm(form) {
     ],
     aiPreview: getWaitingAiPreview(),
   }
+}
+
+async function fetchSavedTasks() {
+  const response = await fetch('/api/tasks', { credentials: 'include' })
+  if (!response.ok) {
+    throw new Error('tasks request failed')
+  }
+  const data = await response.json()
+  return Array.isArray(data.tasks) ? data.tasks : []
+}
+
+async function saveTask(task) {
+  const response = await fetch('/api/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(task),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.detail || 'task save failed')
+  }
+  return data.task || task
+}
+
+async function deleteSavedTask(taskId) {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.detail || 'task delete failed')
+  }
+  return data
 }
 
 function getAreaForm(area = wholeRoomScope) {
@@ -790,6 +827,8 @@ function PlanRoutePreview({
   onTogglePoint,
   onAddFreePoint,
   showRoute = true,
+  showSlamMap = false,
+  onToggleSlamMap,
 }) {
   const mapPadding = Math.max(mapData.size.width, mapData.size.height) * 0.03
   const isSlamRouteMap = Boolean(mapData.slamMap)
@@ -833,23 +872,25 @@ function PlanRoutePreview({
     >
       {mapData.slamMap?.coverage && (
         <>
-          <image
-            href={mapData.slamMap.imageUrl}
-            x={mapData.slamMap.coverage.x}
-            y={mapData.slamMap.coverage.y}
-            width={mapData.slamMap.coverage.width}
-            height={mapData.slamMap.coverage.depth}
-            preserveAspectRatio="none"
-            transform={[
-              mapData.slamMap.transform?.flipX
-                ? `translate(${mapData.slamMap.coverage.x * 2 + mapData.slamMap.coverage.width} 0) scale(-1 1)`
-                : '',
-              mapData.slamMap.transform?.flipY
-                ? `translate(0 ${mapData.slamMap.coverage.y * 2 + mapData.slamMap.coverage.depth}) scale(1 -1)`
-                : '',
-            ].filter(Boolean).join(' ')}
-            className="map-slam-image"
-          />
+          {showSlamMap && (
+            <image
+              href={mapData.slamMap.imageUrl}
+              x={mapData.slamMap.coverage.x}
+              y={mapData.slamMap.coverage.y}
+              width={mapData.slamMap.coverage.width}
+              height={mapData.slamMap.coverage.depth}
+              preserveAspectRatio="none"
+              transform={[
+                mapData.slamMap.transform?.flipX
+                  ? `translate(${mapData.slamMap.coverage.x * 2 + mapData.slamMap.coverage.width} 0) scale(-1 1)`
+                  : '',
+                mapData.slamMap.transform?.flipY
+                  ? `translate(0 ${mapData.slamMap.coverage.y * 2 + mapData.slamMap.coverage.depth}) scale(1 -1)`
+                  : '',
+              ].filter(Boolean).join(' ')}
+              className="map-slam-image"
+            />
+          )}
           <rect
             x={mapData.slamMap.coverage.x}
             y={mapData.slamMap.coverage.y}
@@ -980,6 +1021,18 @@ function PlanRoutePreview({
         <span>{selectedRoutePoints.length} 个巡检点 / 黄色为地标线</span>
       </div>
       <div className="route-map-canvas">{mapSvg}</div>
+      {isSlamRouteMap && (
+        <div className="route-preview-footer">
+          <label className="route-map-toggle">
+            <input
+              type="checkbox"
+              checked={showSlamMap}
+              onChange={(event) => onToggleSlamMap?.(event.target.checked)}
+            />
+            <span>显示 SLAM</span>
+          </label>
+        </div>
+      )}
     </div>
   )
 }
@@ -993,8 +1046,33 @@ function ClusterControl() {
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
   const [planForm, setPlanForm] = useState(defaultPlanForm)
   const [planStep, setPlanStep] = useState(1)
+  const [showSlamMap, setShowSlamMap] = useState(false)
   const [storedResults, setStoredResults] = useState(() => getInspectionResults())
   const activePlanMap = getSceneMap(planForm.sceneId)
+
+  useEffect(() => {
+    let cancelled = false
+
+    fetchSavedTasks()
+      .then((savedTasks) => {
+        if (cancelled || savedTasks.length === 0) return
+        setTaskList((currentTasks) => {
+          const savedIds = new Set(savedTasks.map((task) => task.id))
+          return [
+            ...savedTasks,
+            ...currentTasks.filter((task) => !savedIds.has(task.id)),
+          ]
+        })
+        setSelectedTaskId(savedTasks[0].id)
+      })
+      .catch((error) => {
+        console.warn('load saved tasks failed', error)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const activeTabMeta = useMemo(
     () => tabs.find((tab) => tab.id === activeTab) || tabs[0],
@@ -1113,6 +1191,26 @@ function ClusterControl() {
     setActionNotice(notice)
   }
 
+  const handleDeleteTask = async (event, task) => {
+    event.stopPropagation()
+
+    try {
+      if (task.source !== 'demo') {
+        await deleteSavedTask(task.id)
+      }
+
+      setTaskList((currentTasks) => {
+        const nextTasks = currentTasks.filter((item) => item.id !== task.id)
+        setSelectedTaskId((currentId) => (currentId === task.id ? nextTasks[0]?.id : currentId))
+        return nextTasks
+      })
+      setActionNotice(`${task.name} 已删除。`)
+    } catch (error) {
+      setSelectedTaskId(task.id)
+      setActionNotice(`${task.name} 删除失败：${error.message}`)
+    }
+  }
+
   const openPlanModal = (areaTemplate) => {
     if (areaTemplate) {
       setPlanForm(getAreaForm(areaTemplate))
@@ -1121,6 +1219,7 @@ function ClusterControl() {
     }
 
     setPlanStep(1)
+    setShowSlamMap(false)
     setIsPlanModalOpen(true)
   }
 
@@ -1225,7 +1324,7 @@ function ClusterControl() {
     }))
   }
 
-  const handleCreatePlan = (event) => {
+  const handleCreatePlan = async (event) => {
     event.preventDefault()
     const selectedCount = planForm.sceneId === 'lab-building'
       ? (planForm.routePoints?.length || 0)
@@ -1237,9 +1336,18 @@ function ClusterControl() {
     }
 
     const newTask = createTaskFromForm(planForm)
+    let savedTask
 
-    setTaskList((currentTasks) => [newTask, ...currentTasks])
-    setSelectedTaskId(newTask.id)
+    try {
+      savedTask = await saveTask(newTask)
+    } catch (error) {
+      console.error('save task failed', error)
+      setActionNotice(`任务保存失败：${error.message}`)
+      return
+    }
+
+    setTaskList((currentTasks) => [savedTask, ...currentTasks.filter((task) => task.id !== savedTask.id)])
+    setSelectedTaskId(savedTask.id)
     setActiveTab('plan')
     setIsPlanModalOpen(false)
     setPlanStep(1)
@@ -1254,6 +1362,7 @@ function ClusterControl() {
     const goals = sourceGoals.map((goal) => ({
       ...goal,
       task_id: task.id,
+      speed: NAVIGATION_SPEED,
     }))
     if (goals.length === 0) {
       throw new Error('no navigation points selected')
@@ -1266,6 +1375,7 @@ function ClusterControl() {
       body: JSON.stringify({
         vehicle_id: task.robot,
         task_id: task.id,
+        speed: NAVIGATION_SPEED,
         goals,
       }),
     })
@@ -1361,6 +1471,7 @@ function ClusterControl() {
         sceneId: task.sceneId,
         robot: task.robot,
         pointIds: task.pointIds,
+        routePoints: task.routePoints,
         replayMode: true,
       },
     })
@@ -1422,6 +1533,7 @@ function ClusterControl() {
         sceneId: contextTask.sceneId,
         robot: contextTask.robot,
         pointIds: contextTask.pointIds,
+        routePoints: contextTask.routePoints,
       },
     })
   }
@@ -1576,6 +1688,7 @@ function ClusterControl() {
                         {task.status === '待审核' && (
                           <button type="button" className="action-start" onClick={(event) => handleTaskAction(event, task, 'resume')}>继续</button>
                         )}
+                        <button type="button" className="action-delete" onClick={(event) => handleDeleteTask(event, task)}>删除</button>
                       </div>
                     </div>
                   ))}
@@ -1829,6 +1942,8 @@ function ClusterControl() {
                     selectable
                     onTogglePoint={togglePlanPoint}
                     onAddFreePoint={planForm.sceneId === 'lab-building' ? addFreeRoutePoint : undefined}
+                    showSlamMap={showSlamMap}
+                    onToggleSlamMap={setShowSlamMap}
                   />
                   <aside className="route-compose-panel">
                     <div className="route-order-panel">
@@ -1852,9 +1967,17 @@ function ClusterControl() {
                               <div>
                                 <button type="button" onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, -1) : movePlanPoint(pointId, -1))}>上移</button>
                                 <button type="button" onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, 1) : movePlanPoint(pointId, 1))}>下移</button>
-                                {planForm.sceneId === 'lab-building' && (
-                                  <button type="button" onClick={() => removeFreeRoutePoint(pointId)}>删除</button>
-                                )}
+                                <button
+                                  type="button"
+                                  className="route-delete-button"
+                                  onClick={() => (
+                                    planForm.sceneId === 'lab-building'
+                                      ? removeFreeRoutePoint(pointId)
+                                      : togglePlanPoint(pointId)
+                                  )}
+                                >
+                                  删除
+                                </button>
                               </div>
                             </article>
                           )

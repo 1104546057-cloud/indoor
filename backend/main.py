@@ -4,16 +4,23 @@ from pathlib import Path
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
+from fastapi import Body, Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 try:
-    from .database import get_db
-    from .models import RecognitionResult, User
+    from .database import Base, engine, get_db
+    from .models import InspectionTask, InspectionTaskRoutePoint, RecognitionResult, User
+    from .recognition_client import (
+        capture_recognition,
+        get_recognition_detections,
+        get_recognition_status,
+        list_recognition_devices,
+        open_recognition_stream,
+    )
     from .vehicle_client import (
         get_camera_info,
         get_lidar_info,
@@ -27,8 +34,15 @@ try:
         stop_vehicle,
     )
 except ImportError:
-    from database import get_db
-    from models import RecognitionResult, User
+    from database import Base, engine, get_db
+    from models import InspectionTask, InspectionTaskRoutePoint, RecognitionResult, User
+    from recognition_client import (
+        capture_recognition,
+        get_recognition_detections,
+        get_recognition_status,
+        list_recognition_devices,
+        open_recognition_stream,
+    )
     from vehicle_client import (
         get_camera_info,
         get_lidar_info,
@@ -75,6 +89,11 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def create_missing_tables():
+    Base.metadata.create_all(bind=engine)
+
+
 class LoginRequest(BaseModel):
     # 前端登录表单提交的用户名和密码。
     username: str
@@ -114,13 +133,43 @@ class NavigationGoalRequest(BaseModel):
     x: float
     y: float
     yaw: float = 0.0
+    speed: float | None = None
     source: dict | None = None
 
 
 class NavigationRouteRequest(BaseModel):
     vehicle_id: str | None = None
     task_id: str | None = None
+    speed: float | None = None
     goals: list[NavigationGoalRequest]
+
+
+class TaskRoutePointRequest(BaseModel):
+    id: str | None = None
+    pointId: str | None = None
+    name: str | None = None
+    pointName: str | None = None
+    targetName: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
+class InspectionTaskCreate(BaseModel):
+    id: str
+    sceneId: str | None = None
+    name: str
+    area: str | None = None
+    robot: str | None = None
+    routeId: str | None = None
+    pointIds: list[str] = Field(default_factory=list)
+    routePoints: list[TaskRoutePointRequest] = Field(default_factory=list)
+    start: str | None = None
+    status: str | None = None
+    progress: int = 0
+    priority: str | None = None
+    detail: dict | None = None
+    timeline: list[dict] = Field(default_factory=list)
+    aiPreview: list[dict] = Field(default_factory=list)
 
 
 class RecognitionResultCreate(BaseModel):
@@ -309,6 +358,127 @@ def _serialize_recognition_result(result: RecognitionResult) -> dict:
     }
 
 
+def _serialize_task(task: InspectionTask) -> dict:
+    payload = task.task_payload.copy() if task.task_payload else {}
+    payload.update({
+        'id': task.task_id,
+        'sceneId': task.scene_id,
+        'name': task.name,
+        'area': task.area,
+        'robot': task.robot,
+        'routeId': task.route_id,
+        'start': task.start_time,
+        'status': task.status,
+        'progress': task.progress,
+        'priority': task.priority,
+    })
+
+    if not payload.get('pointIds'):
+        payload['pointIds'] = [
+            point.point_id
+            for point in task.route_points
+            if point.point_id
+        ]
+
+    if not payload.get('routePoints'):
+        payload['routePoints'] = [
+            {
+                'id': point.point_id,
+                'name': point.point_name,
+                'targetName': point.target_name,
+                'x': point.x,
+                'y': point.y,
+            }
+            for point in task.route_points
+            if point.x is not None and point.y is not None
+        ]
+
+    payload['createdAt'] = task.created_at.isoformat(sep=' ') if task.created_at else None
+    payload['updatedAt'] = task.updated_at.isoformat(sep=' ') if task.updated_at else None
+    return payload
+
+
+@app.get("/api/tasks")
+def list_tasks(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tasks = (
+        db.query(InspectionTask)
+        .order_by(InspectionTask.created_at.desc())
+        .limit(min(max(limit, 1), 300))
+        .all()
+    )
+    return {'tasks': [_serialize_task(task) for task in tasks]}
+
+
+@app.post("/api/tasks")
+def create_task(
+    payload: InspectionTaskCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    existing_task = db.query(InspectionTask).filter(InspectionTask.task_id == payload.id).first()
+    if existing_task is not None:
+        raise HTTPException(status_code=409, detail='task already exists')
+
+    raw_payload = payload.model_dump(mode='json')
+    detail = payload.detail or {}
+    task = InspectionTask(
+        task_id=payload.id,
+        scene_id=payload.sceneId,
+        name=payload.name,
+        area=payload.area,
+        robot=payload.robot,
+        route_id=payload.routeId,
+        start_time=payload.start,
+        status=payload.status or 'pending',
+        progress=payload.progress,
+        priority=payload.priority,
+        point_total=int(detail.get('pointTotal') or len(payload.routePoints) or len(payload.pointIds)),
+        task_payload=raw_payload,
+        created_by=current_user.username,
+    )
+
+    source_points = payload.routePoints or [
+        TaskRoutePointRequest(id=point_id, pointId=point_id)
+        for point_id in payload.pointIds
+    ]
+    task.route_points = [
+        InspectionTaskRoutePoint(
+            sequence=index + 1,
+            point_id=point.pointId or point.id,
+            point_name=point.pointName or point.name,
+            target_name=point.targetName,
+            x=point.x,
+            y=point.y,
+            point_payload=point.model_dump(mode='json'),
+        )
+        for index, point in enumerate(source_points)
+    ]
+
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return {'message': 'task created', 'task': _serialize_task(task)}
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    task = db.query(InspectionTask).filter(InspectionTask.task_id == task_id).first()
+    if task is None:
+        raise HTTPException(status_code=404, detail='task not found')
+
+    db.delete(task)
+    db.commit()
+    return {'deleted': True, 'task_id': task_id}
+
+
 @app.post("/api/inference/results")
 @app.post("/api/recognition/results")
 def create_recognition_result(payload: RecognitionResultCreate, db: Session = Depends(get_db)):
@@ -388,6 +558,64 @@ def recognition_summary(
     }
 
 
+@app.get("/api/recognition/devices")
+def recognition_devices(current_user: User = Depends(get_current_user)):
+    return list_recognition_devices()
+
+
+@app.get("/api/recognition/status")
+def recognition_status(
+    device_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    return get_recognition_status(device_id)
+
+
+@app.get("/api/recognition/detections")
+def recognition_detections(
+    device_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    return get_recognition_detections(device_id)
+
+
+@app.post("/api/recognition/capture")
+def recognition_capture(
+    payload: dict = Body(default_factory=dict),
+    current_user: User = Depends(get_current_user),
+):
+    device_id = payload.get('deviceId') or payload.get('device_id')
+    return capture_recognition(device_id, payload)
+
+
+@app.get("/api/recognition/stream")
+def recognition_stream(
+    device_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    source = open_recognition_stream(device_id)
+
+    def iter_stream():
+        try:
+            while True:
+                chunk = source.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            source.close()
+
+    return StreamingResponse(
+        iter_stream(),
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    )
+
+
 @app.post("/api/recognition/results/{result_id}/review")
 def review_recognition_result(
     result_id: int,
@@ -455,6 +683,7 @@ def vehicle_navigation_goal(
         'x': request.x,
         'y': request.y,
         'yaw': request.yaw,
+        'speed': request.speed,
         'task_id': request.task_id,
         'point_id': request.point_id,
         'point_name': request.point_name,
@@ -473,12 +702,14 @@ def vehicle_navigation_route(
 
     route = {
         'task_id': request.task_id,
+        'speed': request.speed,
         'goals': [
             {
                 'frame_id': goal.frame_id,
                 'x': goal.x,
                 'y': goal.y,
                 'yaw': goal.yaw,
+                'speed': goal.speed if goal.speed is not None else request.speed,
                 'task_id': goal.task_id or request.task_id,
                 'point_id': goal.point_id,
                 'point_name': goal.point_name,

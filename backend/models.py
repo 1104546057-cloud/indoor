@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 try:
     from .database import Base
@@ -90,3 +90,51 @@ class RecognitionResult(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class InspectionTask(Base):
+    __tablename__ = 'tb_inspection_task'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    scene_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    area: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    robot: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    route_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    start_time: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default='pending')
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    priority: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    point_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    task_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    route_points: Mapped[list['InspectionTaskRoutePoint']] = relationship(
+        back_populates='task',
+        cascade='all, delete-orphan',
+        order_by='InspectionTaskRoutePoint.sequence',
+    )
+
+
+class InspectionTaskRoutePoint(Base):
+    __tablename__ = 'tb_inspection_task_route_point'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey('tb_inspection_task.task_id'), index=True, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    point_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    point_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    target_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    point_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    task: Mapped[InspectionTask] = relationship(back_populates='route_points')

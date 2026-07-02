@@ -1,12 +1,45 @@
+import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { getStoredUser } from '../utils/auth'
+import { clearUser, getStoredUser, hasRuntimeLogin } from '../utils/auth'
 
 function ProtectedRoute({ children }) {
-  // 路由守卫只做前端层面的登录状态检查；真正的接口安全仍由后端 JWT 校验负责。
+  const [authState, setAuthState] = useState('checking')
   const user = getStoredUser()
 
-  if (!user?.token) {
-    // replace 可以避免用户点浏览器后退又回到受保护页面。
+  useEffect(() => {
+    let ignore = false
+
+    async function verifySession() {
+      if (!user?.token || !hasRuntimeLogin()) {
+        clearUser()
+        if (!ignore) setAuthState('guest')
+        return
+      }
+
+      try {
+        const response = await fetch('/api/auth/me', { credentials: 'include' })
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+        if (!ignore) setAuthState('authed')
+      } catch {
+        clearUser()
+        if (!ignore) setAuthState('guest')
+      }
+    }
+
+    verifySession()
+
+    return () => {
+      ignore = true
+    }
+  }, [user?.token])
+
+  if (authState === 'checking') {
+    return null
+  }
+
+  if (authState === 'guest') {
     return <Navigate to="/login" replace />
   }
 

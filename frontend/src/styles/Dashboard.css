@@ -862,6 +862,28 @@
   margin-bottom: 10px;
 }
 
+.ai-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.ai-panel-actions span {
+  max-width: 116px;
+  overflow: hidden;
+  color: #8fcfdd;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-panel-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
 .ai-result-card {
   display: grid;
   grid-template-columns: 82px minmax(0, 1fr);
@@ -916,13 +938,81 @@
   height: 94px;
   display: grid;
   place-items: center;
+  overflow: hidden;
   border: 1px solid rgba(146, 220, 236, 0.14);
   clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
   background: linear-gradient(180deg, rgba(56, 103, 126, 0.12), rgba(15, 42, 60, 0.64));
 }
 
+.ai-result-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(1.05) contrast(1.04);
+}
+
 .visual-dial {
   position: relative;
+}
+
+.visual-target {
+  position: relative;
+  background:
+    radial-gradient(circle at center, rgba(76, 255, 217, 0.16), transparent 62%),
+    linear-gradient(180deg, rgba(19, 75, 82, 0.32), rgba(10, 31, 45, 0.72));
+}
+
+.target-detection-mark {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  border: 2px solid rgba(107, 245, 223, 0.78);
+  box-shadow:
+    0 0 16px rgba(67, 232, 218, 0.22),
+    inset 0 0 18px rgba(67, 232, 218, 0.12);
+}
+
+.target-detection-mark::before,
+.target-detection-mark::after,
+.target-detection-mark span,
+.target-detection-mark b {
+  content: '';
+  position: absolute;
+  background: #75fff0;
+  box-shadow: 0 0 10px rgba(117, 255, 240, 0.45);
+}
+
+.target-detection-mark::before {
+  left: 50%;
+  top: -10px;
+  width: 2px;
+  height: 78px;
+}
+
+.target-detection-mark::after {
+  left: -10px;
+  top: 50%;
+  width: 78px;
+  height: 2px;
+}
+
+.target-detection-mark span {
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.target-detection-mark b {
+  right: 6px;
+  bottom: 6px;
+  width: 14px;
+  height: 14px;
+  background: transparent;
+  border-right: 2px solid #75fff0;
+  border-bottom: 2px solid #75fff0;
 }
 
 .dial-ring {

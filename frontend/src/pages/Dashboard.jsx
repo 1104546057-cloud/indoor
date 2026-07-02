@@ -116,17 +116,21 @@ function extractTime(value) {
 }
 
 function mapStoredResultToDashboard(result) {
+  const isYoloResult = /yolo|目标检测|object detection/i.test(result.recognitionType || '')
+  const targetName = result.targetName || result.value || result.pointId || '--'
+
   return {
     id: result.id,
     source: result,
-    point: result.targetName || result.pointId,
+    point: isYoloResult ? (result.robotId || 'nano1camera') : (result.targetName || result.pointId),
     title: result.recognitionType || 'AI识别',
     value: result.value || '--',
-    range: result.status === '异常' ? '待人工复核' : '正常范围',
+    range: isYoloResult ? `目标：${targetName}` : (result.status === '异常' ? '待人工复核' : '正常范围'),
     time: extractTime(result.capturedAt),
     confidence: result.confidence || '--',
     status: result.status || '正常',
-    visual: result.visual === 'digital' ? 'digital' : 'dial',
+    imageUrl: result.imageUrl || '',
+    visual: isYoloResult ? 'target' : (result.visual === 'digital' ? 'digital' : 'dial'),
   }
 }
 
@@ -194,6 +198,8 @@ function Dashboard() {
   const [storedResults, setStoredResults] = useState(() => getInspectionResults())
   const [backendResults, setBackendResults] = useState([])
   const [selectedResult, setSelectedResult] = useState(null)
+  const [isCapturing, setIsCapturing] = useState(false)
+  const [captureMessage, setCaptureMessage] = useState('')
 
   useEffect(() => {
     let ignore = false
@@ -257,6 +263,41 @@ function Dashboard() {
       window.clearInterval(timer)
     }
   }, [])
+
+  const refreshRecognitionResults = async () => {
+    const response = await fetch('/api/recognition/results?limit=50', { credentials: 'include' })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const data = await response.json()
+    setBackendResults(data.results || [])
+  }
+
+  const captureRecognition = async () => {
+    setIsCapturing(true)
+    setCaptureMessage('正在采集')
+    try {
+      const response = await fetch('/api/recognition/capture', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceId: 'nano1camera',
+          source: 'dashboard-manual',
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.detail || data.error || `HTTP ${response.status}`)
+      }
+      setCaptureMessage(`已采集 ${data.detections?.length || 0} 个目标`)
+      await refreshRecognitionResults()
+    } catch (error) {
+      setCaptureMessage(error instanceof Error ? error.message : '采集失败')
+    } finally {
+      setIsCapturing(false)
+    }
+  }
 
   const summary = useMemo(() => {
     const total = vehicles.length
@@ -494,9 +535,15 @@ function Dashboard() {
         <section className="dashboard-panel ai-panel">
           <div className="dashboard-panel-heading">
             <h2>AI识别实时结果</h2>
-            <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
-              更多
-            </button>
+            <div className="ai-panel-actions">
+              <span>{captureMessage}</span>
+              <button type="button" className="dashboard-text-button" onClick={captureRecognition} disabled={isCapturing}>
+                {isCapturing ? '采集中' : '采集识别'}
+              </button>
+              <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
+                更多
+              </button>
+            </div>
           </div>
           <div className="ai-result-list">
             {dashboardAiResults.map((result) => (
@@ -518,7 +565,14 @@ function Dashboard() {
                   <small>{result.time}</small>
                 </div>
                 <div className={`ai-result-visual visual-${result.visual}`}>
-                  {result.visual === 'dial' ? (
+                  {result.imageUrl ? (
+                    <img className="ai-result-image" src={result.imageUrl} alt={`${result.title} ${result.value}`} />
+                  ) : result.visual === 'target' ? (
+                    <div className="target-detection-mark">
+                      <span />
+                      <b />
+                    </div>
+                  ) : result.visual === 'dial' ? (
                     <>
                       <span className="dial-ring" />
                       <span className="dial-pointer" />
