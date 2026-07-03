@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#0a1e28"/>
+      <stop offset="1" stop-color="#051016"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#1a3a48"/>
+      <stop offset="1" stop-color="#0c1e2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <!-- 走廊地面 -->
+  <polygon points="60,200 580,200 620,340 20,340" fill="url(#floor)"/>
+  <!-- 天花板灯带 -->
+  <rect x="160" y="130" width="320" height="3" rx="1.5" fill="#4ce6ff" opacity="0.6"/>
+  <rect x="200" y="130" width="240" height="16" rx="2" fill="#4ce6ff" opacity="0.04"/>
+  <!-- 左侧门 -->
+  <rect x="60" y="148" width="100" height="190" rx="2" fill="#0f2532" stroke="#24505e" stroke-width="1.5"/>
+  <rect x="72" y="160" width="76" height="80" rx="1" fill="#061218" stroke="#173440" stroke-width="1"/>
+  <circle cx="135" cy="235" r="4" fill="#3ca8b8" opacity="0.6"/>
+  <!-- 中间区域消防设施 -->
+  <rect x="280" y="160" width="80" height="120" rx="3" fill="#1a1520" stroke="#4a3040" stroke-width="1.5"/>
+  <rect x="290" y="170" width="60" height="48" rx="2" fill="#2a1520" stroke="#5a3040" stroke-width="1"/>
+  <text x="320" y="200" text-anchor="middle" fill="#ff695c" font-size="9" font-family="Arial">消防</text>
+  <!-- 右侧通道 -->
+  <rect x="460" y="155" width="140" height="180" rx="3" fill="#0f252f" stroke="#1d4d59" stroke-width="1.5"/>
+  <rect x="475" y="170" width="110" height="24" rx="2" fill="#0a1a22" stroke="#1a3d47" stroke-width="1"/>
+  <rect x="475" y="202" width="110" height="50" rx="2" fill="#0a1a22" stroke="#1a3d47" stroke-width="1"/>
+  <!-- 指示牌 -->
+  <rect x="380" y="155" width="60" height="22" rx="2" fill="#1a3d2a" stroke="#2a5d3a" stroke-width="1"/>
+  <text x="410" y="170" text-anchor="middle" fill="#44f0a3" font-size="8" font-family="Arial">EXIT</text>
+  <!-- 氛围光 -->
+  <ellipse cx="320" cy="190" rx="200" ry="70" fill="#4ce6ff" opacity="0.025"/>
+</svg>

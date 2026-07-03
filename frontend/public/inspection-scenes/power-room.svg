@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#0a1e28"/>
+      <stop offset="1" stop-color="#051016"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#1a3a48"/>
+      <stop offset="1" stop-color="#0c1e2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <!-- 走廊地面 -->
+  <polygon points="120,220 520,220 580,340 60,340" fill="url(#floor)"/>
+  <!-- 走廊天花板灯光 -->
+  <rect x="240" y="140" width="160" height="4" rx="2" fill="#4ce6ff" opacity="0.7"/>
+  <rect x="260" y="140" width="120" height="18" rx="2" fill="#4ce6ff" opacity="0.06"/>
+  <!-- 左侧配电柜组 -->
+  <rect x="80" y="160" width="120" height="180" rx="3" fill="#14303d" stroke="#2b6f81" stroke-width="1.5"/>
+  <rect x="90" y="172" width="50" height="42" rx="2" fill="#0b1a22" stroke="#1a4a58" stroke-width="1"/>
+  <rect x="150" y="172" width="40" height="42" rx="2" fill="#0b1a22" stroke="#1a4a58" stroke-width="1"/>
+  <rect x="90" y="222" width="100" height="18" rx="2" fill="#0b1a22" stroke="#1a4a58" stroke-width="1"/>
+  <circle cx="115" cy="260" r="16" fill="#0d1f2a" stroke="#3ca8b8" stroke-width="2"/>
+  <rect x="100" y="290" width="30" height="20" rx="2" fill="#1a4a3a" opacity="0.7"/>
+  <!-- 右侧配电柜组 -->
+  <rect x="440" y="170" width="140" height="170" rx="3" fill="#14303d" stroke="#2b6f81" stroke-width="1.5"/>
+  <rect x="455" y="184" width="55" height="38" rx="2" fill="#0b1a22" stroke="#1a4a58" stroke-width="1"/>
+  <rect x="518" y="184" width="48" height="38" rx="2" fill="#0b1a22" stroke="#1a4a58" stroke-width="1"/>
+  <rect x="455" y="232" width="110" height="16" rx="2" fill="#0b1a22" stroke="#1a4a58" stroke-width="1"/>
+  <rect x="455" y="258" width="110" height="62" rx="2" fill="#0d1f2a" stroke="#2a5a68" stroke-width="1"/>
+  <!-- 管道/线缆 -->
+  <line x1="200" y1="220" x2="440" y2="220" stroke="#1a404d" stroke-width="3"/>
+  <!-- 氛围光 -->
+  <ellipse cx="320" cy="200" rx="180" ry="60" fill="#4ce6ff" opacity="0.03"/>
+</svg>

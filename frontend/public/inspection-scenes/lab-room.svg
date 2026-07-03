@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#0a1e28"/>
+      <stop offset="1" stop-color="#051016"/>
+    </linearGradient>
+    <linearGradient id="wall" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#163540"/>
+      <stop offset="1" stop-color="#0d212c"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <!-- 实验室工作台 -->
+  <rect x="100" y="200" width="180" height="14" rx="2" fill="#1a3a48" stroke="#2b5a68" stroke-width="1"/>
+  <rect x="110" y="162" width="10" height="38" fill="#16303d"/>
+  <rect x="260" y="162" width="10" height="38" fill="#16303d"/>
+  <!-- 实验设备 -->
+  <rect x="140" y="150" width="100" height="50" rx="3" fill="#0f2836" stroke="#24505e" stroke-width="1.5"/>
+  <rect x="155" y="158" width="30" height="16" rx="2" fill="#0a181f" stroke="#1a3038" stroke-width="1"/>
+  <rect x="195" y="158" width="30" height="16" rx="2" fill="#0a181f" stroke="#1a3038" stroke-width="1"/>
+  <circle cx="170" cy="185" r="6" fill="#2a1a1a" stroke="#5a3030" stroke-width="1"/>
+  <circle cx="210" cy="185" r="6" fill="#1a2a1a" stroke="#305a30" stroke-width="1"/>
+  <!-- 右侧机柜 -->
+  <rect x="400" y="140" width="160" height="200" rx="3" fill="#0f252f" stroke="#1d4d59" stroke-width="1.5"/>
+  <rect x="412" y="152" width="136" height="48" rx="2" fill="#0a1a22" stroke="#1a3d47" stroke-width="1"/>
+  <rect x="412" y="210" width="136" height="48" rx="2" fill="#0a1a22" stroke="#1a3d47" stroke-width="1"/>
+  <rect x="412" y="268" width="136" height="48" rx="2" fill="#0a1a22" stroke="#1a3d47" stroke-width="1"/>
+  <circle cx="450" cy="176" r="4" fill="#44f0a3" opacity="0.7"/>
+  <circle cx="470" cy="176" r="4" fill="#44f0a3" opacity="0.4"/>
+  <circle cx="450" cy="234" r="4" fill="#44f0a3" opacity="0.5"/>
+  <circle cx="450" cy="292" r="4" fill="#ffc858" opacity="0.6"/>
+  <!-- 天花板灯 -->
+  <rect x="270" y="100" width="100" height="3" rx="1.5" fill="#4ce6ff" opacity="0.5"/>
+  <rect x="290" y="100" width="60" height="14" rx="2" fill="#4ce6ff" opacity="0.04"/>
+  <!-- 标语 -->
+  <rect x="70" y="100" width="130" height="24" rx="2" fill="#0a1e28" stroke="#1a3d47" stroke-width="1"/>
+  <text x="135" y="116" text-anchor="middle" fill="#8cbac6" font-size="9" font-family="Arial">实验区 A-3</text>
+  <!-- 氛围光 -->
+  <ellipse cx="320" cy="200" rx="220" ry="80" fill="#4ce6ff" opacity="0.02"/>
+</svg>
