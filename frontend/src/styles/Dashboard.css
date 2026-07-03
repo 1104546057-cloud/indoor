@@ -1,79 +1,55 @@
 /* ============================================================
-   Dashboard HUD 指挥大屏样式
+   Dashboard HUD 指挥大屏 — Leaflet 交互地图 + HUD 浮层
    ============================================================ */
 
+/* ---- 设计令牌 ---- */
 .dashboard-hud-page {
-  height: 100%;
-  min-height: 0;
-  color: #eefcff;
-}
-
-/* ---- 地图画布 ---- */
-.dashboard-hud-canvas {
   --cyan: #4ce6ff;
   --cyan-soft: rgba(76, 230, 255, 0.72);
   --border: rgba(65, 221, 255, 0.4);
   --panel: rgba(4, 16, 24, 0.62);
+  --text-primary: #eefcff;
+  --text-secondary: #8fb9c8;
+  --text-muted: #6b9aaa;
+  --danger: #ff695c;
+  --warn: #ffb347;
+
   position: relative;
-  min-height: calc(100vh - 168px);
+  width: 100%;
+  height: calc(100vh - 148px);
+  color: var(--text-primary);
   overflow: hidden;
-  border: 1px solid rgba(61, 202, 238, 0.22);
-  border-radius: 0;
-  background:
-    radial-gradient(circle at 50% 48%, rgba(11, 52, 68, 0.2), transparent 34%),
-    url('/maps/campus-satellite.png') center/cover no-repeat;
-  box-shadow:
-    inset 0 0 0 1px rgba(79, 224, 255, 0.08),
-    0 0 36px rgba(0, 0, 0, 0.22);
+  background: #041018;
 }
 
-/* ---- 地图遮罩层 ---- */
-.hud-map-darkener,
+/* ======== 地图舞台 ======== */
+.hud-map-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.hud-leaflet-map {
+  background: #041018 !important;
+}
+
+/* Leaflet 暗色主题覆盖 */
+.hud-leaflet-map .leaflet-container {
+  background: #041018;
+}
+
+/* 地图渐晕遮罩 */
 .hud-map-vignette {
   position: absolute;
   inset: 0;
+  z-index: 500;
   pointer-events: none;
-}
-
-.hud-map-darkener {
-  background:
-    linear-gradient(
-      180deg,
-      rgba(0, 8, 14, 0.72) 0,
-      rgba(0, 8, 14, 0.72) 64px,
-      rgba(0, 8, 14, 0.28) 64px,
-      rgba(0, 10, 16, 0.56) 100%
-    ),
-    radial-gradient(
-      circle at 50% 52%,
-      rgba(1, 13, 19, 0.62) 0,
-      rgba(1, 13, 19, 0.28) 18%,
-      rgba(0, 8, 12, 0.12) 44%,
-      rgba(0, 8, 12, 0.5) 100%
-    );
-}
-
-.hud-map-vignette {
   box-shadow:
-    inset 0 0 140px rgba(0, 0, 0, 0.38),
-    inset 0 0 0 1px rgba(72, 223, 255, 0.14);
+    inset 0 0 160px rgba(0, 0, 0, 0.42),
+    inset 0 0 0 1px rgba(72, 223, 255, 0.12);
 }
 
-/* 遮盖地图截图中的中间弹窗残留 */
-.hud-map-vignette::before {
-  content: '';
-  position: absolute;
-  left: 46.2%;
-  top: 41.4%;
-  width: 10.8%;
-  height: 8.6%;
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(11, 46, 61, 0.88), rgba(1, 12, 18, 0.94) 72%);
-  box-shadow: 0 0 36px rgba(7, 31, 42, 0.45);
-}
-
-/* ---- 统一 HUD 面板 ---- */
+/* ======== 统一 HUD 浮层面板 ======== */
 .hud-clock-panel,
 .hud-task-panel,
 .hud-tools-panel,
@@ -82,11 +58,9 @@
 .hud-metric-box,
 .hud-preview-card,
 .hud-legend-strip,
-.hud-capture-button,
-.hud-robot-pill,
-.dashboard-modal {
+.hud-capture-button {
   position: absolute;
-  z-index: 3;
+  z-index: 10;
   border: 1px solid var(--border);
   background:
     linear-gradient(180deg, rgba(10, 34, 46, 0.24), rgba(2, 14, 22, 0.82)),
@@ -94,711 +68,384 @@
   box-shadow:
     inset 0 0 0 1px rgba(76, 230, 255, 0.05),
     0 0 18px rgba(32, 188, 255, 0.08);
+  backdrop-filter: blur(4px);
 }
 
-/* 面板切角 */
+/* 切角 */
 .hud-task-panel,
 .hud-tools-panel,
 .hud-log-panel,
 .hud-alert-panel,
 .hud-preview-card {
   clip-path: polygon(
-    10px 0,
-    calc(100% - 10px) 0,
-    100% 10px,
-    100% calc(100% - 10px),
-    calc(100% - 10px) 100%,
-    10px 100%,
-    0 calc(100% - 10px),
-    0 10px
+    10px 0, calc(100% - 10px) 0, 100% 10px,
+    100% calc(100% - 10px), calc(100% - 10px) 100%,
+    10px 100%, 0 calc(100% - 10px), 0 10px
   );
 }
 
-/* ---- 面板顶部微光泽 ---- */
-.hud-clock-panel::before,
+/* 面板顶部微光泽 */
 .hud-task-panel::before,
 .hud-tools-panel::before,
 .hud-log-panel::before,
 .hud-alert-panel::before,
 .hud-preview-card::before {
   content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(90deg, transparent, rgba(73, 224, 255, 0.08), transparent);
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(73, 224, 255, 0.06), transparent);
 }
 
-/* ---- 时钟面板 (左上角) ---- */
+/* ======== 时钟 (左上角) ======== */
 .hud-clock-panel {
-  top: 28px;
-  left: 18px;
-  width: 210px;
-  padding: 14px 16px;
-  border-left-width: 2px;
-  border-right: 0;
-  border-top: 0;
-  border-bottom: 0;
+  top: 18px; left: 14px;
+  padding: 12px 14px;
+  border: none;
   background: transparent;
   box-shadow: none;
 }
-
 .hud-clock-panel strong {
   display: block;
-  font-size: 34px;
-  line-height: 1;
-  letter-spacing: 2px;
+  font-size: 30px; line-height: 1; letter-spacing: 1.5px;
 }
-
 .hud-clock-panel span {
-  display: block;
-  margin-top: 8px;
-  color: #8eb9c6;
-  font-size: 16px;
+  display: block; margin-top: 6px;
+  color: var(--text-secondary); font-size: 13px;
 }
 
-/* ---- 顶部指标块 (右上) ---- */
+/* ======== 顶部指标块 (右侧) ======== */
 .hud-top-metrics {
-  position: absolute;
-  top: 26px;
-  right: 24px;
-  z-index: 3;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  width: 530px;
+  position: absolute; top: 16px; right: 14px; z-index: 10;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+  width: 460px;
 }
-
 .hud-metric-box {
-  position: relative;
-  padding: 14px 16px;
-  min-height: 98px;
+  position: relative; padding: 12px 14px; min-height: 78px;
 }
-
-.hud-metric-box span,
-.hud-metric-box small {
-  display: block;
-}
-
 .hud-metric-box span {
-  color: #9bc6d3;
-  font-size: 15px;
+  display: block; color: var(--text-secondary); font-size: 13px;
 }
-
 .hud-metric-box strong {
-  display: block;
-  margin-top: 6px;
-  font-size: 48px;
-  line-height: 1;
+  display: block; margin-top: 4px; font-size: 40px; line-height: 1;
 }
-
-.hud-metric-box strong.tone-danger { color: #ff695c; }
-
+.hud-metric-box strong.tone-danger { color: var(--danger); }
 .hud-metric-box small {
-  margin-top: 6px;
-  color: #88b8c7;
-  font-size: 13px;
+  display: block; margin-top: 4px; color: var(--text-muted); font-size: 11px;
 }
 
-/* ---- 任务面板 (左中) ---- */
+/* ======== 任务面板 (左侧中段) ======== */
 .hud-task-panel {
-  top: 116px;
-  left: 14px;
-  width: 278px;
-  padding: 18px;
+  top: 106px; left: 14px; width: 260px; padding: 14px;
 }
 
-/* ---- 工具面板 (右中) ---- */
+/* ======== 工具面板 (右侧中段) ======== */
 .hud-tools-panel {
-  top: 116px;
-  right: 14px;
-  width: 244px;
-  padding: 14px;
+  top: 106px; right: 14px; width: 230px; padding: 12px;
 }
 
-/* ---- 日志面板 (左下) ---- */
+/* ======== 日志面板 (左下) ======== */
 .hud-log-panel {
-  left: 14px;
-  bottom: 72px;
-  width: 346px;
-  padding: 14px;
+  left: 14px; bottom: 58px; width: 320px; max-height: 230px; padding: 12px;
 }
 
-/* ---- 告警面板 (右下) ---- */
+/* ======== 告警面板 (右下) ======== */
 .hud-alert-panel {
-  right: 14px;
-  bottom: 66px;
-  width: 304px;
-  padding: 14px;
+  right: 14px; bottom: 56px; width: 290px; padding: 12px;
 }
 
-/* ---- 面板标题行 ---- */
+/* ======== 面板标题行 ======== */
 .hud-panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; margin-bottom: 10px;
 }
-
-.hud-panel-header h2,
-.hud-panel-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
+.hud-panel-header h2, .hud-panel-header h3 {
+  margin: 0; font-size: 14px; font-weight: 700; letter-spacing: 0.5px;
 }
-
 .hud-panel-header em {
-  padding: 3px 10px;
-  border: 1px solid rgba(76, 230, 255, 0.3);
-  border-radius: 999px;
-  color: #4ce6ff;
-  font-style: normal;
-  font-size: 12px;
+  padding: 2px 8px; border: 1px solid rgba(76, 230, 255, 0.3);
+  border-radius: 999px; color: var(--cyan); font-style: normal; font-size: 11px;
 }
 
-/* ---- 任务面板内部 ---- */
+/* ======== 任务面板内部 ======== */
 .hud-task-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 16px;
+  display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;
 }
-
-.hud-task-title strong {
-  font-size: 28px;
-}
-
-.hud-task-title span,
-.hud-progress-row span,
-.hud-task-meta span,
-.hud-alert-row span,
-.hud-log-row time {
-  color: #8fb9c8;
-}
+.hud-task-title strong { font-size: 22px; }
+.hud-task-title span { color: var(--text-secondary); font-size: 12px; }
 
 .hud-progress-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 10px;
+  display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;
 }
-
-.hud-progress-row b {
-  color: var(--cyan);
-  font-size: 24px;
-}
+.hud-progress-row span { color: var(--text-secondary); font-size: 12px; }
+.hud-progress-row b { color: var(--cyan); font-size: 18px; }
 
 .hud-progress-track {
-  height: 5px;
-  margin-bottom: 18px;
-  background: rgba(15, 51, 67, 0.85);
+  height: 4px; margin-bottom: 14px; background: rgba(15, 51, 67, 0.85);
 }
-
 .hud-progress-track span {
-  display: block;
-  height: 100%;
+  display: block; height: 100%;
   background: linear-gradient(90deg, #30d9f2, #4ae2ff);
-  box-shadow: 0 0 12px rgba(48, 217, 242, 0.45);
+  box-shadow: 0 0 10px rgba(48, 217, 242, 0.45);
 }
 
 .hud-task-meta {
-  margin: 0 0 18px;
-  display: grid;
-  gap: 10px;
+  margin: 0 0 14px; display: grid; gap: 7px;
 }
+.hud-task-meta div { display: flex; justify-content: space-between; gap: 8px; }
+.hud-task-meta div span { font-size: 12px; color: var(--text-secondary); }
+.hud-task-meta div strong { font-size: 13px; }
 
-.hud-task-meta div {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-/* ---- 通用按钮 ---- */
-.hud-outline-button,
-.hud-preview-foot button,
-.hud-capture-button {
-  border: 1px solid rgba(70, 220, 255, 0.36);
-  background: rgba(8, 40, 54, 0.62);
-  color: #c9f8ff;
-  cursor: pointer;
-}
-
+/* ======== 按钮 ======== */
 .hud-outline-button {
-  width: 100%;
-  min-height: 44px;
-  font-size: 15px;
+  width: 100%; min-height: 38px; font-size: 13px;
+  border: 1px solid rgba(70, 220, 255, 0.36);
+  background: rgba(8, 40, 54, 0.62); color: #c9f8ff; cursor: pointer;
 }
 
-/* ---- 地图工具 ---- */
+/* ======== 地图工具按钮组 ======== */
 .hud-icon-toolbar {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 10px;
-  margin-bottom: 16px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px;
 }
-
 .hud-icon-toolbar button {
   aspect-ratio: 1;
   border: 1px solid rgba(72, 224, 255, 0.34);
-  background: rgba(8, 40, 54, 0.52);
-  color: #d3f9ff;
-  font-size: 20px;
-  cursor: pointer;
+  background: rgba(8, 40, 54, 0.52); color: #d3f9ff; font-size: 17px; cursor: pointer;
+}
+.hud-icon-toolbar button:hover {
+  background: rgba(24, 100, 130, 0.52);
+  border-color: var(--cyan);
 }
 
-/* ---- 图层控制 ---- */
+/* ======== 图层控制 ======== */
 .hud-layer-panel {
-  padding: 12px 10px;
-  border: 1px solid rgba(72, 224, 255, 0.18);
-  background: rgba(2, 16, 24, 0.44);
+  padding: 10px 8px; margin-bottom: 8px;
+  border: 1px solid rgba(72, 224, 255, 0.18); background: rgba(2, 16, 24, 0.44);
 }
-
 .hud-layer-title {
-  margin-bottom: 10px;
-  color: #c7f7ff;
-  font-size: 14px;
+  margin-bottom: 8px; color: #c7f7ff; font-size: 12px; font-weight: 600;
 }
-
 .hud-layer-panel label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  color: #9dc7d4;
-  font-size: 15px;
+  display: flex; align-items: center; gap: 6px; margin-bottom: 7px;
+  color: #9dc7d4; font-size: 12px;
 }
+.hud-layer-panel input { accent-color: #42e1ff; }
 
-.hud-layer-panel input {
-  accent-color: #42e1ff;
+.hud-view-info {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 8px; font-size: 11px;
+  border: 1px solid rgba(72, 224, 255, 0.12); background: rgba(2, 16, 24, 0.3);
 }
+.hud-view-info span { color: var(--text-secondary); }
+.hud-view-info small { color: var(--text-muted); font-family: 'Courier New', monospace; }
 
-/* ---- 文字链接 ---- */
+/* ======== 文字链接 ======== */
 .hud-text-link {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: #73eaff;
-  cursor: pointer;
+  border: 0; padding: 0; background: transparent; color: #73eaff;
+  font-size: 12px; cursor: pointer;
 }
 
-/* ---- 日志列表 ---- */
-.hud-log-list {
-  display: grid;
-  gap: 14px;
-}
-
+/* ======== 日志列表 ======== */
+.hud-log-list { display: grid; gap: 10px; }
 .hud-log-row {
-  display: grid;
-  grid-template-columns: 14px 82px 1fr;
-  gap: 12px;
-  align-items: start;
-  font-size: 14px;
+  display: grid; grid-template-columns: 10px 68px 1fr; gap: 10px;
+  align-items: start; font-size: 12px;
 }
-
 .hud-log-dot {
-  width: 11px;
-  height: 11px;
-  margin-top: 5px;
-  border-radius: 50%;
+  width: 9px; height: 9px; margin-top: 4px; border-radius: 50%;
 }
+.tone-ok  { background: #39f095; box-shadow: 0 0 8px #39f095; }
+.tone-scan { background: #54cfff; box-shadow: 0 0 8px #54cfff; }
+.tone-move { background: #ffc857; box-shadow: 0 0 8px #ffc857; }
+.hud-log-row time { color: var(--text-secondary); font-size: 11px; }
+.hud-log-row p { margin: 0; line-height: 1.4; }
 
-.tone-ok { background: #39f095; box-shadow: 0 0 10px #39f095; }
-.tone-scan { background: #54cfff; box-shadow: 0 0 10px #54cfff; }
-.tone-move { background: #ffc857; box-shadow: 0 0 10px #ffc857; }
-
-.hud-log-row p {
-  margin: 0;
-  line-height: 1.45;
-}
-
-/* ---- 告警面板 ---- */
+/* ======== 告警面板 ======== */
 .hud-alert-totals {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 14px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;
 }
-
 .hud-alert-total {
-  padding: 12px 10px;
-  text-align: center;
-  border: 1px solid rgba(72, 224, 255, 0.14);
-  background: rgba(6, 24, 35, 0.58);
+  padding: 10px 8px; text-align: center;
+  border: 1px solid rgba(72, 224, 255, 0.14); background: rgba(6, 24, 35, 0.58);
 }
-
-.hud-alert-total strong {
-  display: block;
-  font-size: 34px;
-}
-
-.hud-alert-total span {
-  display: block;
-  margin-top: 4px;
-  font-size: 13px;
-}
+.hud-alert-total strong { display: block; font-size: 28px; }
+.hud-alert-total span  { display: block; margin-top: 3px; font-size: 11px; }
 
 .hud-alert-total.tone-danger strong,
-.hud-alert-total.tone-danger span { color: #ff695c; }
+.hud-alert-total.tone-danger span { color: var(--danger); }
 .hud-alert-total.tone-warn strong,
-.hud-alert-total.tone-warn span { color: #ffb347; }
+.hud-alert-total.tone-warn span { color: var(--warn); }
 .hud-alert-total.tone-info strong,
 .hud-alert-total.tone-info span { color: #ffd95f; }
 
-.hud-alert-list {
-  display: grid;
-  gap: 10px;
-}
-
+.hud-alert-list { display: grid; gap: 8px; }
 .hud-alert-row {
-  display: grid;
-  grid-template-columns: 72px 1fr auto;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 0;
-  border: 0;
-  border-top: 1px solid rgba(68, 209, 243, 0.12);
-  background: transparent;
-  color: #e8fbff;
-  text-align: left;
-  cursor: pointer;
-}
-
-.hud-alert-row b {
-  font-weight: 500;
-}
-
-.hud-alert-row em {
-  color: #ff9f72;
-  font-style: normal;
-}
-
-/* ---- 机器人标记 ---- */
-.hud-robot-marker {
-  position: absolute;
-  z-index: 4;
-  transform: translate(-50%, -50%);
-}
-
-.hud-robot-ring {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(78, 233, 255, 0.42), rgba(8, 39, 57, 0.96) 58%);
-  border: 2px solid rgba(79, 228, 255, 0.7);
-  box-shadow: 0 0 0 8px rgba(79, 228, 255, 0.12);
-}
-
-.hud-robot-pill {
-  left: 18px;
-  top: -2px;
-  padding: 12px 14px;
-  min-width: 110px;
-}
-
-.hud-robot-pill strong,
-.hud-robot-pill span {
-  display: block;
-}
-
-.hud-robot-pill strong {
-  font-size: 18px;
-}
-
-.hud-robot-pill span {
-  margin-top: 2px;
-  color: #a7ceda;
+  display: grid; grid-template-columns: 62px 1fr auto; gap: 8px; align-items: center;
+  padding: 8px 0; border: 0; border-top: 1px solid rgba(68, 209, 243, 0.12);
+  background: transparent; color: var(--text-primary); text-align: left; cursor: pointer;
   font-size: 12px;
 }
+.hud-alert-row b { font-weight: 500; }
+.hud-alert-row em { color: #ff9f72; font-style: normal; font-size: 11px; }
 
-/* ---- 路线和连接线 SVG ---- */
-.hud-route-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
+/* ======== Leaflet 自定义图层 ======== */
+
+/* 机器人标记 */
+.leaflet-robot-container {
+  position: relative;
+}
+.leaflet-robot-ring {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, rgba(78, 233, 255, 0.42), rgba(8, 39, 57, 0.96) 58%);
+  border: 2px solid rgba(79, 228, 255, 0.7);
+  box-shadow: 0 0 0 10px rgba(79, 228, 255, 0.12);
+}
+.leaflet-robot-pill {
+  position: absolute; left: 36px; top: -4px; min-width: 100px;
+  padding: 8px 10px; font-size: 11px; line-height: 1.35;
+  border: 1px solid rgba(65, 221, 255, 0.4);
+  background: rgba(4, 16, 24, 0.78);
+  white-space: nowrap;
   pointer-events: none;
 }
+.leaflet-robot-pill strong { display: block; font-size: 13px; }
+.leaflet-robot-pill span  { display: block; color: #a7ceda; font-size: 10px; }
 
-.hud-main-route {
-  fill: none;
-  stroke: #52e4ff;
-  stroke-width: 0.42;
-  stroke-dasharray: 1.1 1.15;
-  filter: drop-shadow(0 0 6px rgba(82, 228, 255, 0.55));
-}
-
-.hud-connector-route {
-  fill: none;
-  stroke: #52e4ff;
-  stroke-width: 0.3;
-  filter: drop-shadow(0 0 6px rgba(82, 228, 255, 0.55));
-}
-
-/* ---- 地图锚点 ---- */
-.hud-map-anchor {
-  position: absolute;
-  z-index: 4;
-  width: 15px;
-  height: 15px;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 2px solid rgba(205, 251, 255, 0.9);
-  box-shadow:
-    0 0 0 8px rgba(76, 230, 255, 0.08),
-    0 0 12px rgba(76, 230, 255, 0.5);
-}
-
-.hud-map-anchor.tone-ready { background: #44f0a3; }
-.hud-map-anchor.tone-running { background: #4edfff; }
-.hud-map-anchor.tone-queued { background: #ffc858; }
-
-/* ---- 室内预览卡 ---- */
+/* ======== 室内预览卡 (浮在地图上) ======== */
 .hud-preview-card {
-  padding: 10px;
+  width: 252px; padding: 8px; cursor: pointer;
+  transition: border-color 0.2s;
 }
-
-.hud-preview-head,
-.hud-preview-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
+.hud-preview-card:nth-of-type(1) { top: 170px; left: 50%; transform: translateX(-50%); } /* west */
+.hud-preview-card:nth-of-type(2) { top: 480px; right: 200px; }  /* east */
+.hud-preview-card:nth-of-type(3) { top: 560px; left: 40px; }     /* south */
+.hud-preview-card:hover {
+  border-color: rgba(82, 228, 255, 0.7);
 }
 
 .hud-preview-head {
-  margin-bottom: 8px;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; margin-bottom: 6px;
 }
-
-.hud-preview-head strong {
-  font-size: 14px;
-  font-weight: 700;
-}
-
+.hud-preview-head strong { font-size: 13px; font-weight: 700; }
 .hud-preview-head em {
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-style: normal;
-  font-size: 12px;
+  padding: 2px 8px; border-radius: 999px;
+  font-style: normal; font-size: 10px;
 }
 
-.hud-preview-card.tone-ready em {
-  background: rgba(80, 242, 171, 0.2);
-  color: #4bf1aa;
-}
-
-.hud-preview-card.tone-running em {
-  background: rgba(84, 207, 255, 0.22);
-  color: #56d7ff;
-}
-
-.hud-preview-card.tone-queued em {
-  background: rgba(255, 194, 88, 0.18);
-  color: #ffc75f;
-}
+.hud-preview-card.tone-ready em  { background: rgba(80, 242, 171, 0.2); color: #4bf1aa; }
+.hud-preview-card.tone-running em { background: rgba(84, 207, 255, 0.22); color: #56d7ff; }
+.hud-preview-card.tone-queued em { background: rgba(255, 194, 88, 0.18); color: #ffc75f; }
 
 .hud-preview-card img {
-  display: block;
-  width: 100%;
-  height: 120px;
-  object-fit: cover;
-  border: 1px solid rgba(72, 224, 255, 0.22);
+  display: block; width: 100%; height: 108px;
+  object-fit: cover; border: 1px solid rgba(72, 224, 255, 0.22);
 }
 
 .hud-preview-foot {
-  margin-top: 8px;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; margin-top: 6px;
 }
-
-.hud-preview-foot span {
-  color: #8fc0ce;
-  font-size: 13px;
-}
-
+.hud-preview-foot span { color: var(--text-secondary); font-size: 11px; }
 .hud-preview-foot button {
-  min-width: 92px;
-  min-height: 34px;
-  font-size: 13px;
+  min-width: 78px; min-height: 30px; font-size: 11px;
+  border: 1px solid rgba(70, 220, 255, 0.36);
+  background: rgba(8, 40, 54, 0.62); color: #c9f8ff; cursor: pointer;
 }
 
-/* ---- 底部图例 ---- */
+/* ======== 底部图例 ======== */
 .hud-legend-strip {
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 28px;
-  padding: 13px 24px;
-  font-size: 14px;
+  left: 50%; bottom: 18px; transform: translateX(-50%);
+  display: flex; gap: 22px; padding: 10px 20px; font-size: 12px;
 }
-
-.hud-legend-strip span {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-}
+.hud-legend-strip span { display: inline-flex; align-items: center; gap: 7px; }
 
 .legend-icon {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
+  display: inline-block; width: 12px; height: 12px; border-radius: 50%;
 }
-
 .legend-icon.robot { background: linear-gradient(180deg, #90f7ff, #4de5ff); }
 .legend-icon.route { background: linear-gradient(180deg, #4de5ff, #12bfe0); }
 .legend-icon.point { border: 2px solid #56e0ff; background: transparent; }
-.legend-icon.area { border: 2px solid #58cfff; background: rgba(88, 207, 255, 0.16); border-radius: 2px; }
+.legend-icon.area  { border: 2px solid #58cfff; background: rgba(88, 207, 255, 0.16); border-radius: 2px; }
 
-/* ---- 触发识别按钮 ---- */
+/* ======== 触发识别按钮 ======== */
 .hud-capture-button {
-  right: 16px;
-  bottom: 128px;
-  padding: 0 16px;
-  min-height: 40px;
+  right: 12px; bottom: 108px; padding: 0 14px;
+  min-height: 34px; font-size: 12px;
+  border: 1px solid rgba(70, 220, 255, 0.36);
+  background: rgba(8, 40, 54, 0.62); color: #c9f8ff; cursor: pointer;
 }
+.hud-capture-button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .hud-capture-message {
-  position: absolute;
-  right: 16px;
-  bottom: 96px;
-  z-index: 4;
-  color: #9dc8d7;
-  font-size: 12px;
+  position: absolute; right: 12px; bottom: 82px; z-index: 11;
+  color: var(--text-secondary); font-size: 11px;
 }
 
-/* ---- 弹窗 ---- */
+/* ======== 弹窗 ======== */
 .dashboard-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: 24px;
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; place-items: center; padding: 24px;
   background: rgba(0, 8, 14, 0.65);
   backdrop-filter: blur(10px);
 }
-
 .dashboard-modal {
-  position: relative;
-  width: min(760px, 100%);
-  padding: 22px;
-  color: #eefcff;
+  position: relative; width: min(680px, 100%); padding: 20px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(10, 34, 46, 0.24), rgba(2, 14, 22, 0.82)), var(--panel);
+  box-shadow: inset 0 0 0 1px rgba(76, 230, 255, 0.05), 0 0 18px rgba(32, 188, 255, 0.08);
+  color: var(--text-primary);
 }
-
 .dashboard-modal-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 18px;
+  display: flex; justify-content: space-between; gap: 16px; margin-bottom: 16px;
 }
-
+.dashboard-modal-head span { font-size: 12px; color: var(--cyan); }
+.dashboard-modal-head h3 { margin: 4px 0 0; font-size: 18px; }
 .dashboard-modal-head button {
-  width: 38px;
-  height: 38px;
-  border: 1px solid rgba(126, 227, 255, 0.24);
-  background: transparent;
-  color: #eefcff;
-  font-size: 24px;
-  cursor: pointer;
+  width: 34px; height: 34px;
+  border: 1px solid rgba(126, 227, 255, 0.24); background: transparent;
+  color: var(--text-primary); font-size: 22px; cursor: pointer;
 }
-
 .dashboard-modal-grid {
-  display: grid;
-  grid-template-columns: 1.05fr 1fr;
-  gap: 18px;
+  display: grid; grid-template-columns: 1.05fr 1fr; gap: 16px;
 }
-
 .dashboard-modal-preview img {
-  display: block;
-  width: 100%;
-  min-height: 260px;
-  object-fit: cover;
+  display: block; width: 100%; min-height: 240px; object-fit: cover;
 }
-
-.dashboard-modal-meta {
-  display: grid;
-  gap: 10px;
-}
-
+.dashboard-modal-meta { display: grid; gap: 8px; }
 .dashboard-modal-meta div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(133, 223, 249, 0.1);
+  display: flex; justify-content: space-between; gap: 10px;
+  padding-bottom: 6px; border-bottom: 1px solid rgba(133, 223, 249, 0.1);
+  font-size: 13px;
 }
-
 .dashboard-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 20px;
+  display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;
 }
-
 .dashboard-modal-actions button {
-  min-height: 40px;
-  padding: 0 18px;
+  min-height: 36px; padding: 0 16px; font-size: 13px;
 }
-
 .dashboard-modal-actions .is-danger {
-  background: rgba(127, 25, 28, 0.62);
-  border-color: rgba(255, 135, 117, 0.34);
+  background: rgba(127, 25, 28, 0.62); border-color: rgba(255, 135, 117, 0.34); color: #ff9aa8;
 }
 
-/* ---- 响应式 ---- */
+/* ======== 响应式 ======== */
 @media (max-width: 1280px) {
-  .hud-top-metrics {
-    width: 450px;
-  }
-
-  .hud-task-panel {
-    width: 250px;
-  }
-
-  .hud-tools-panel,
-  .hud-alert-panel {
-    width: 224px;
-  }
+  .hud-top-metrics { width: 400px; }
+  .hud-task-panel { width: 240px; }
+  .hud-tools-panel { width: 210px; }
+  .hud-log-panel { width: 290px; }
+  .hud-alert-panel { width: 270px; }
+  .hud-preview-card { width: 220px; }
 }
 
 @media (max-width: 900px) {
-  .dashboard-hud-canvas {
-    min-height: 1480px;
-  }
+  .dashboard-hud-page { height: auto; min-height: 100vh; }
+  .hud-map-stage { position: relative; height: 480px; }
 
-  .hud-top-metrics {
-    position: relative;
-    top: auto;
-    right: auto;
-    width: auto;
-    margin: 14px;
+  .hud-top-metrics { position: relative; top: auto; right: auto; width: auto; margin: 10px; grid-template-columns: 1fr 1fr 1fr; }
+  .hud-task-panel, .hud-tools-panel, .hud-log-panel, .hud-alert-panel,
+  .hud-preview-card, .hud-legend-strip, .hud-capture-button {
+    position: relative; top: auto; left: auto !important; right: auto; bottom: auto;
+    width: calc(100% - 20px) !important; margin: 10px; transform: none;
   }
-
-  .hud-task-panel,
-  .hud-tools-panel,
-  .hud-log-panel,
-  .hud-alert-panel,
-  .hud-preview-card,
-  .hud-legend-strip,
-  .hud-capture-button {
-    position: relative;
-    top: auto;
-    left: auto !important;
-    right: auto;
-    bottom: auto;
-    width: calc(100% - 28px) !important;
-    margin: 14px;
-    transform: none;
-  }
-
-  .hud-clock-panel,
-  .hud-route-overlay,
-  .hud-robot-marker,
-  .hud-map-anchor {
-    display: none;
-  }
-
-  .dashboard-modal-grid {
-    grid-template-columns: 1fr;
-  }
+  .hud-clock-panel { display: none; }
+  .dashboard-modal-grid { grid-template-columns: 1fr; }
 }
