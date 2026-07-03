@@ -1,332 +1,250 @@
-/* eslint-disable react/prop-types */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MapContainer, ImageOverlay, useMap, useMapEvents } from 'react-leaflet'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
-import {
-  getInspectionResults,
-  subscribeInspectionResults,
-  updateInspectionResultReview,
-} from '../utils/inspectionResults'
+import { getInspectionResults, subscribeInspectionResults, updateInspectionResultReview } from '../utils/inspectionResults'
 import '../styles/Dashboard.css'
 
-// ---- Leaflet CRS: 像素坐标系，让我们的模型坐标和地图像素一一对应 ----
-const MAP_IMAGE_W = 2560
-const MAP_IMAGE_H = 1440
-const MAP_BOUNDS = [[0, 0], [MAP_IMAGE_H, MAP_IMAGE_W]]
-
-const pixelCRS = L.Util.extend(L.CRS.Simple, {
-  transformation: new L.Transformation(1, 0, 1, 0),
-})
-
-// ---- 数据 ----
 const fallbackVehicles = [
-  { id: 'nano1', online: true, voltage: 47.8, speed: 0.8, battery: 82 },
-  { id: 'nano2', online: false, voltage: null, speed: 0, battery: 76 },
-  { id: 'nano3', online: false, voltage: null, speed: 0, battery: 71 },
+  { id: 'nano1', name: '巡检车 nano1', status: 'offline', online: false, voltage: null, speed: 0, battery: 82 },
+  { id: 'nano2', name: '巡检车 nano2', status: 'offline', online: false, voltage: null, speed: 0, battery: 76 },
+  { id: 'nano3', name: '巡检车 nano3', status: 'offline', online: false, voltage: null, speed: 0, battery: 71 },
 ]
 
-const seedEvents = [
-  { time: '10:42:15', text: 'nano1 到达点位 P22 配电室', type: 'ok' },
-  { time: '10:42:18', text: 'AI 识别开始: 仪表 OCR', type: 'scan' },
-  { time: '10:42:21', text: 'AI 识别完成，结果: 正常', type: 'ok' },
-  { time: '10:42:23', text: '巡检图片上传成功', type: 'scan' },
-  { time: '10:45:36', text: '前往下一点位 P23 空调机房', type: 'move' },
+const kpiCards = [
+  { key: 'todayTasks', label: '今日巡检任务', value: '6', unit: '个', delta: '较昨日 +20%', tone: 'cyan' },
+  { key: 'completed', label: '已完成巡检', value: '4', unit: '个', delta: '较昨日 +33%', tone: 'blue' },
+  { key: 'completionRate', label: '巡检完成率', value: '66.7', unit: '%', delta: '较昨日 +10%', tone: 'green' },
+  { key: 'aiRate', label: 'AI识别成功率', value: '98.7', unit: '%', delta: '较昨日 +2.1%', tone: 'violet' },
+  { key: 'alarms', label: '异常告警', value: '3', unit: '个', delta: '较昨日 +25%', tone: 'red' },
+  { key: 'onlineRobots', label: '在线机器人', value: '1', unit: '台', delta: '电量 82%', tone: 'cyan' },
 ]
 
-const seedAreas = [
+const inspectionPoints = [
+  { id: 1, name: '低压配电柜1', status: '已完成', eta: '10:42:15', result: '正常' },
+  { id: 2, name: '变压器温控仪', status: '已完成', eta: '10:45:32', result: '正常' },
+  { id: 3, name: '低压配电柜2', status: '巡检中', eta: '10:48:10', result: '识别中' },
+  { id: 4, name: 'UPS电源柜', status: '待巡检', eta: '--', result: '--' },
+  { id: 5, name: '蓄电池组', status: '待巡检', eta: '--', result: '--' },
+]
+
+const aiResults = [
   {
-    id: 'west',
-    title: '中法核工程与技术学院',
-    status: '可巡检',
-    statusTone: 'ready',
-    points: 18,
-    imageUrl: '/inspection-scenes/power-room.svg',
-    anchorLatLng: [520, 710],
-    cardOffset: { x: -210, y: -310 },
+    id: 'meter-1',
+    point: '低压配电柜1',
+    title: '电压表',
+    value: '380 V',
+    range: '380 ± 10 V',
+    time: '10:54:21',
+    confidence: '98.6%',
+    status: '正常',
+    visual: 'dial',
   },
   {
-    id: 'east',
-    title: '中山大学珠海校区教学楼A区',
-    status: '巡检中',
+    id: 'meter-2',
+    point: '变压器温控仪',
+    title: '电流表',
+    value: '36.2 A',
+    range: '0 ~ 50 A',
+    time: '10:54:21',
+    confidence: '97.3%',
+    status: '正常',
+    visual: 'digital',
+  },
+]
+
+const eventStream = [
+  { time: '10:42:15', text: '机器人到达巡检点【低压配电柜1】', type: 'done' },
+  { time: '10:42:18', text: '启动 AI 识别，识别类型：仪表 OCR', type: 'scan' },
+  { time: '10:42:21', text: 'AI 识别完成，结果：正常', type: 'done' },
+  { time: '10:42:23', text: '识别图片与原始图上传成功', type: 'upload' },
+  { time: '10:42:25', text: '前往下一个巡检点【变压器温控仪】', type: 'move' },
+  { time: '10:45:32', text: '机器人到达巡检点【变压器温控仪】', type: 'done' },
+]
+
+const alarmFeed = [
+  { time: '10:18:32', title: '低压配电柜2 电流异常', detail: '电流值：63.2 A', level: '高', state: '未处理' },
+  { time: '09:47:11', title: '环境监测 烟雾浓度超标', detail: '烟雾值：35 ppm', level: '中', state: '未处理' },
+  { time: '08:55:24', title: '蓄电池组 温度过高', detail: '温度值：45.6 ℃', level: '中', state: '未处理' },
+]
+
+const facilityMaps = [
+  {
+    id: 'hanlin-1',
+    name: '瀚林1号电房',
+    task: 'P柜巡检任务',
+    robot: 'nano1',
+    status: '执行中',
     statusTone: 'running',
-    points: 24,
-    imageUrl: '/inspection-scenes/corridor.svg',
-    anchorLatLng: [800, 1760],
-    cardOffset: { x: -360, y: -10 },
+    progress: 65,
+    pointCount: 35,
+    currentPoint: 'P33',
+    variant: 'hanlin',
   },
   {
-    id: 'south',
-    title: '蓝海科技产业园',
-    status: '待巡检',
+    id: 'hanlin-2',
+    name: '瀚林2号电房',
+    task: '例行巡检待启动',
+    robot: 'nano2',
+    status: '待命',
+    statusTone: 'idle',
+    progress: 0,
+    pointCount: 28,
+    currentPoint: '--',
+    variant: 'compact',
+  },
+  {
+    id: 'distribution-b',
+    name: '配电室B区',
+    task: '夜间复核任务',
+    robot: 'nano3',
+    status: '排队中',
     statusTone: 'queued',
-    points: 16,
-    imageUrl: '/inspection-scenes/lab-room.svg',
-    anchorLatLng: [880, 1120],
-    cardOffset: { x: -510, y: 20 },
+    progress: 0,
+    pointCount: 42,
+    currentPoint: '--',
+    variant: 'wide',
   },
 ]
 
-// ---- 工具 ----
 function formatVoltage(value) {
   const numeric = Number(value)
   return Number.isFinite(numeric) ? `${numeric.toFixed(1)} V` : '--'
 }
 
-function getClockParts() {
-  const now = new Date()
-  return {
-    time: now.toLocaleTimeString('zh-CN', { hour12: false }),
-    date: now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long' }),
-  }
+function extractTime(value) {
+  if (!value) return '--:--:--'
+  return String(value).split(' ').pop()
 }
 
-function mapStoredResultToDisplay(result) {
+function mapStoredResultToDashboard(result) {
+  const isYoloResult = /yolo|目标检测|object detection/i.test(result.recognitionType || '')
+  const targetName = result.targetName || result.value || result.pointId || '--'
+
   return {
     id: result.id,
-    title: result.targetName || result.pointId || result.recognitionType || '识别结果',
-    value: result.value || '--',
-    status: result.status || '正常',
-    confidence: result.confidence || '--',
-    capturedAt: result.capturedAt || '--',
-    reviewStatus: result.reviewStatus || '待复核',
-    recognitionType: result.recognitionType || 'AI 识别',
     source: result,
+    point: isYoloResult ? (result.robotId || 'nano1camera') : (result.targetName || result.pointId),
+    title: result.recognitionType || 'AI识别',
+    value: result.value || '--',
+    range: isYoloResult ? `目标：${targetName}` : (result.status === '异常' ? '待人工复核' : '正常范围'),
+    time: extractTime(result.capturedAt),
+    confidence: result.confidence || '--',
+    status: result.status || '正常',
+    imageUrl: result.imageUrl || '',
+    visual: isYoloResult ? 'target' : (result.visual === 'digital' ? 'digital' : 'dial'),
   }
 }
 
-// ---- 地图交互钩子 ----
-function PanZoomController({ onViewChange }) {
-  const map = useMap()
-
-  useMapEvents({
-    moveend: () => {
-      const center = map.getCenter()
-      onViewChange({ center: [center.lat, center.lng], zoom: map.getZoom() })
-    },
-    zoomend: () => {
-      const center = map.getCenter()
-      onViewChange({ center: [center.lat, center.lng], zoom: map.getZoom() })
-    },
-  })
-
-  return null
+function ReviewStatusPill({ status }) {
+  const tone = status === '确认异常' ? 'confirmed' : status === '标记误报' ? 'false-positive' : 'pending'
+  return <span className={`review-status-pill tone-${tone}`}>{status || '待复核'}</span>
 }
 
-// ---- 机器人在地图上渲染 ----
-function RobotLayer({ position, activeVehicle }) {
-  const map = useMap()
-  const markerRef = useRef(null)
-  const ringRef = useRef(null)
-
-  useEffect(() => {
-    if (!markerRef.current) {
-      const icon = L.divIcon({
-        className: 'leaflet-robot-container',
-        html: `<div class="leaflet-robot-ring"></div><div class="leaflet-robot-pill"><strong>${activeVehicle?.id || 'nano1'}</strong><span>${activeVehicle?.speed ?? 0.8} m/s</span><span>${activeVehicle?.battery ?? 82}%</span></div>`,
-        iconSize: [48, 48],
-        iconAnchor: [24, 24],
-      })
-      markerRef.current = L.marker(position, { icon, interactive: false }).addTo(map)
-    } else {
-      markerRef.current.setLatLng(position)
-    }
-
-    // 脉冲圆环
-    if (!ringRef.current) {
-      ringRef.current = L.circle(position, {
-        radius: 85,
-        color: '#4ce6ff',
-        fillColor: '#4ce6ff',
-        fillOpacity: 0.08,
-        weight: 1.5,
-        interactive: false,
-      }).addTo(map)
-    } else {
-      ringRef.current.setLatLng(position)
-    }
-
-    return () => {
-      if (markerRef.current) {
-        markerRef.current.remove()
-        markerRef.current = null
-      }
-      if (ringRef.current) {
-        ringRef.current.remove()
-        ringRef.current = null
-      }
-    }
-  }, [position, activeVehicle, map])
-
-  return null
-}
-
-// ---- 地图锚点 + 预览卡连线 ----
-function AreaLayers({ areas }) {
-  const map = useMap()
-  const markersRef = useRef([])
-  const linesRef = useRef([])
-
-  useEffect(() => {
-    // 清除旧层
-    markersRef.current.forEach((m) => m.remove())
-    linesRef.current.forEach((l) => l.remove())
-    markersRef.current = []
-    linesRef.current = []
-
-    areas.forEach((area) => {
-      // 锚点
-      const dot = L.circle(area.anchorLatLng, {
-        radius: 11,
-        color: 'rgba(205, 251, 255, 0.9)',
-        fillColor: area.statusTone === 'ready' ? '#44f0a3' : area.statusTone === 'running' ? '#4edfff' : '#ffc858',
-        fillOpacity: 1,
-        weight: 2,
-        interactive: false,
-      }).addTo(map)
-      markersRef.current.push(dot)
-
-      // 发光外圈
-      const glow = L.circle(area.anchorLatLng, {
-        radius: 38,
-        color: '#4ce6ff',
-        fillOpacity: 0,
-        weight: 0.8,
-        opacity: 0.3,
-        interactive: false,
-      }).addTo(map)
-      markersRef.current.push(glow)
-    })
-  }, [areas, map])
-
-  return null
-}
-
-// ---- 巡检路线 ----
-function PatrolRouteLayer() {
-  const map = useMap()
-  const lineRef = useRef(null)
-  const lineRef2 = useRef(null)
-
-  useEffect(() => {
-    const route1 = [[520, 710], [600, 1180], [880, 1120]]
-    const route2 = [[600, 1180], [800, 1760]]
-
-    lineRef.current = L.polyline(route1, {
-      color: '#52e4ff',
-      weight: 1.5,
-      dashArray: '6 8',
-      opacity: 0.65,
-      interactive: false,
-    }).addTo(map)
-
-    lineRef2.current = L.polyline(route2, {
-      color: '#52e4ff',
-      weight: 1.5,
-      dashArray: '6 8',
-      opacity: 0.65,
-      interactive: false,
-    }).addTo(map)
-
-    return () => {
-      lineRef.current?.remove()
-      lineRef2.current?.remove()
-    }
-  }, [map])
-
-  return null
-}
-
-// ---- 弹窗 ----
-function ResultModal({ result, onClose, onReview }) {
+function AiResultDetailModal({ result, onClose, onReview }) {
   if (!result) return null
 
+  const pointName = result.targetName || result.pointId || '--'
+  const status = result.status || '异常'
+
   return (
-    <div className="dashboard-modal-backdrop" onMouseDown={onClose}>
-      <div className="dashboard-modal" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="dashboard-modal-head">
+    <div className="ai-review-modal-backdrop" onMouseDown={onClose}>
+      <div className="ai-review-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="ai-review-modal-head">
           <div>
             <span>AI RESULT REVIEW</span>
-            <h3>{result.targetName || result.pointId || result.recognitionType || '识别详情'}</h3>
+            <h3>{pointName} · {result.summary || result.recognitionType || '识别异常'}</h3>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭">×</button>
         </div>
-        <div className="dashboard-modal-grid">
-          <div className="dashboard-modal-preview">
-            <img src="/inspection-scenes/power-room.svg" alt="巡检预览" />
+
+        <div className="ai-review-modal-body">
+          <div className="ai-review-preview">
+            <div className="ai-review-frame">
+              <span>{result.pointId || pointName}</span>
+              <i />
+            </div>
+            <div className="ai-review-verdict">
+              <strong className={status === '异常' ? 'is-danger' : ''}>{status}</strong>
+              <p>{status === '异常' ? '识别结果超出预设安全范围，建议人工复核后闭环处理。' : '当前识别结果处于正常范围。'}</p>
+            </div>
           </div>
-          <div className="dashboard-modal-meta">
-            <div><span>识别类型</span><strong>{result.recognitionType || '--'}</strong></div>
-            <div><span>识别值</span><strong>{result.value || '--'}</strong></div>
-            <div><span>识别状态</span><strong>{result.status || '--'}</strong></div>
-            <div><span>置信度</span><strong>{result.confidence || '--'}</strong></div>
-            <div><span>采集时间</span><strong>{result.capturedAt || '--'}</strong></div>
-            <div><span>复核状态</span><strong>{result.reviewStatus || '待复核'}</strong></div>
+
+          <div className="ai-review-detail-grid">
+            <span>巡检任务<b>{result.taskName || result.taskId || '--'}</b></span>
+            <span>执行设备<b>{result.robot || result.robotId || 'nano1'}</b></span>
+            <span>识别点位<b>{pointName}</b></span>
+            <span>识别类型<b>{result.recognitionType || '--'}</b></span>
+            <span>识别值<b className={status === '异常' ? 'is-danger' : ''}>{result.value || '--'}</b></span>
+            <span>置信度<b>{result.confidence || '--'}</b></span>
+            <span>采集时间<b>{result.capturedAt || '--'}</b></span>
+            <span>复核状态<b><ReviewStatusPill status={result.reviewStatus} /></b></span>
           </div>
-        </div>
-        <div className="dashboard-modal-actions">
-          <button type="button" onClick={() => onReview(result.id, '标记误报')}>标记误报</button>
-          <button type="button" className="is-danger" onClick={() => onReview(result.id, '确认异常')}>确认异常</button>
+
+          <div className="ai-review-modal-actions">
+            {result.reviewedAt && <small>复核时间：{result.reviewedAt}</small>}
+            <button type="button" onClick={() => onReview(result.id, '标记误报')}>标记误报</button>
+            <button type="button" className="danger" onClick={() => onReview(result.id, '确认异常')}>确认异常</button>
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-// ---- 主组件 ----
 function Dashboard() {
   const navigate = useNavigate()
   const [vehicles, setVehicles] = useState(fallbackVehicles)
+  const [statusText, setStatusText] = useState('等待车辆注册表同步')
+  const [lastUpdated, setLastUpdated] = useState('--:--:--')
   const [storedResults, setStoredResults] = useState(() => getInspectionResults())
   const [backendResults, setBackendResults] = useState([])
   const [selectedResult, setSelectedResult] = useState(null)
   const [isCapturing, setIsCapturing] = useState(false)
   const [captureMessage, setCaptureMessage] = useState('')
-  const [clock, setClock] = useState(() => getClockParts())
-  const [mapView, setMapView] = useState({ center: [720, 1280], zoom: -1 })
-  const [showGrid, setShowGrid] = useState(true)
-  const [showLabels, setShowLabels] = useState(true)
-  const [showRoute, setShowRoute] = useState(true)
 
-  // 时钟
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(getClockParts()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-
-  // 车辆轮询
   useEffect(() => {
     let ignore = false
+
     async function loadVehicles() {
       try {
         const response = await fetch('/api/vehicles', { credentials: 'include' })
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
         const data = await response.json()
         if (ignore) return
-        const nextVehicles = data.vehicles?.length
-          ? data.vehicles.map((vehicle, index) => ({
-            speed: [0.8, 0.6, 0.5][index] ?? 0.5,
-            battery: [82, 76, 71][index] ?? 70,
-            ...vehicle,
-          }))
-          : fallbackVehicles
+
+        const nextVehicles = data.vehicles?.length ? data.vehicles.map((vehicle, index) => ({
+          speed: [0.8, 0.6, 0.5][index] ?? 0.5,
+          battery: [82, 76, 71][index] ?? 70,
+          ...vehicle,
+        })) : fallbackVehicles
+
         setVehicles(nextVehicles)
+        setStatusText('车辆注册表已同步')
+        setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
       } catch {
-        if (!ignore) setVehicles(fallbackVehicles)
+        if (ignore) return
+        setVehicles(fallbackVehicles)
+        setStatusText('车辆 agent 未连接，显示默认车队')
+        setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
       }
     }
+
     loadVehicles()
     const timer = window.setInterval(loadVehicles, 5000)
-    return () => { ignore = true; window.clearInterval(timer) }
+
+    return () => {
+      ignore = true
+      window.clearInterval(timer)
+    }
   }, [])
 
-  // 识别结果订阅
   useEffect(() => subscribeInspectionResults(setStoredResults), [])
 
-  // 识别结果轮询
   useEffect(() => {
     let ignore = false
+
     async function loadRecognitionResults() {
       try {
         const response = await fetch('/api/recognition/results?limit=50', { credentials: 'include' })
@@ -337,29 +255,41 @@ function Dashboard() {
         if (!ignore) setBackendResults([])
       }
     }
+
     loadRecognitionResults()
     const timer = window.setInterval(loadRecognitionResults, 5000)
-    return () => { ignore = true; window.clearInterval(timer) }
+    return () => {
+      ignore = true
+      window.clearInterval(timer)
+    }
   }, [])
 
   const refreshRecognitionResults = async () => {
     const response = await fetch('/api/recognition/results?limit=50', { credentials: 'include' })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
     const data = await response.json()
     setBackendResults(data.results || [])
   }
 
   const captureRecognition = async () => {
     setIsCapturing(true)
-    setCaptureMessage('正在触发识别...')
+    setCaptureMessage('正在采集')
     try {
       const response = await fetch('/api/recognition/capture', {
-        method: 'POST', credentials: 'include',
+        method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId: 'nano1camera', source: 'dashboard-manual' }),
+        body: JSON.stringify({
+          deviceId: 'nano1camera',
+          source: 'dashboard-manual',
+        }),
       })
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`)
+      if (!response.ok) {
+        throw new Error(data.detail || data.error || `HTTP ${response.status}`)
+      }
       setCaptureMessage(`已采集 ${data.detections?.length || 0} 个目标`)
       await refreshRecognitionResults()
     } catch (error) {
@@ -369,265 +299,429 @@ function Dashboard() {
     }
   }
 
-  const recognitionSource = useMemo(
-    () => (backendResults.length ? backendResults : storedResults),
-    [backendResults, storedResults],
-  )
-
-  const displayResults = useMemo(
-    () => recognitionSource.slice(0, 5).map(mapStoredResultToDisplay),
-    [recognitionSource],
-  )
-
-  const anomalyResults = useMemo(
-    () => recognitionSource.filter((r) => r.status === '异常' || r.status === '告警'),
-    [recognitionSource],
-  )
-
   const summary = useMemo(() => {
-    const online = vehicles.filter((v) => v.online).length
-    const active = vehicles.find((v) => v.online) || vehicles[0] || fallbackVehicles[0]
-    return { total: vehicles.length, online, activeVehicle: active, aiCount: recognitionSource.length, alarmCount: anomalyResults.length }
-  }, [anomalyResults.length, recognitionSource.length, vehicles])
+    const total = vehicles.length
+    const online = vehicles.filter((vehicle) => vehicle.online).length
+    const activeVehicle = vehicles.find((vehicle) => vehicle.online) || vehicles[0] || fallbackVehicles[0]
 
-  const alertSummary = useMemo(() => {
-    const severe = anomalyResults.length || 3
-    return [
-      { label: '严重', value: severe, tone: 'danger' },
-      { label: '重要', value: Math.max(Math.ceil(severe / 2), 1), tone: 'warn' },
-      { label: '一般', value: Math.max(Math.ceil(severe / 1.5), 2), tone: 'info' },
-    ]
-  }, [anomalyResults.length])
+    return {
+      total,
+      online,
+      offline: Math.max(total - online, 0),
+      onlineRate: total ? Math.round((online / total) * 100) : 0,
+      activeVehicle,
+    }
+  }, [vehicles])
+
+  const recognitionSource = useMemo(() => (
+    backendResults.length ? backendResults : storedResults
+  ), [backendResults, storedResults])
+
+  const anomalyResults = useMemo(() => (
+    recognitionSource.filter((result) => result.status === '异常' || result.status === '告警')
+  ), [recognitionSource])
+
+  const pendingReviewCount = useMemo(() => (
+    anomalyResults.filter((result) => result.reviewStatus === '待复核').length
+  ), [anomalyResults])
+
+  const dashboardKpis = useMemo(() => {
+    const normalCount = recognitionSource.filter((result) => result.status === '正常').length
+    const aiRate = recognitionSource.length ? ((normalCount / recognitionSource.length) * 100).toFixed(1) : null
+
+    return kpiCards.map((card) => {
+      if (card.key === 'aiRate' && aiRate) {
+        return { ...card, value: aiRate, delta: `已识别 ${recognitionSource.length} 条` }
+      }
+      if (card.key === 'alarms') {
+        return {
+          ...card,
+          value: String(anomalyResults.length),
+          delta: pendingReviewCount ? `待复核 ${pendingReviewCount} 条` : '暂无待复核',
+        }
+      }
+      if (card.key === 'onlineRobots') {
+        return {
+          ...card,
+          value: String(summary.online),
+          delta: `共 ${summary.total} 台`,
+        }
+      }
+      return card
+    })
+  }, [anomalyResults.length, pendingReviewCount, recognitionSource, summary.online, summary.total])
+
+  const dashboardAiResults = useMemo(() => (
+    recognitionSource.length ? recognitionSource.slice(0, 5).map(mapStoredResultToDashboard) : aiResults
+  ), [recognitionSource])
+
+  const dashboardAlarms = useMemo(() => (
+    anomalyResults.length
+      ? anomalyResults.slice(0, 5).map((result) => ({
+        time: extractTime(result.capturedAt),
+        title: `${result.targetName || result.pointId} ${result.summary || result.recognitionType || '识别异常'}`,
+        detail: `${result.recognitionType || '识别值'}：${result.value || '--'} / 置信度 ${result.confidence || '--'}`,
+        level: result.level === 'alarm' ? '高' : '中',
+        state: result.reviewStatus || '待复核',
+        source: result,
+      }))
+      : alarmFeed
+  ), [anomalyResults])
+
+  const dashboardMaps = useMemo(() => (
+    facilityMaps.map((map) => {
+      if (map.id !== 'hanlin-1') {
+        return { ...map, anomalies: 0, pendingReview: 0 }
+      }
+
+      return {
+        ...map,
+        anomalies: anomalyResults.length,
+        pendingReview: pendingReviewCount,
+        currentPoint: recognitionSource[0]?.pointId || map.currentPoint,
+      }
+    })
+  ), [anomalyResults.length, pendingReviewCount, recognitionSource])
+
+  const currentMission = {
+    name: '上午例行巡检',
+    code: 'TASK20200617001',
+    route: '1号配电房_主线路',
+    startTime: '08:30:00',
+    duration: '60 分钟',
+    progress: 65,
+  }
 
   const handleReviewResult = async (resultId, reviewStatus) => {
-    const backendResult = backendResults.find((r) => String(r.resultId || r.id) === String(resultId))
+    const backendResult = backendResults.find((result) => String(result.resultId || result.id) === String(resultId))
     if (backendResult?.resultId) {
       try {
         const response = await fetch(`/api/recognition/results/${backendResult.resultId}/review`, {
-          method: 'POST', credentials: 'include',
+          method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ review_status: reviewStatus }),
         })
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        await refreshRecognitionResults()
-      } catch { /* keep local fallback */ }
+        if (response.ok) {
+          const data = await response.json()
+          setBackendResults((current) => current.map((item) => (
+            item.resultId === backendResult.resultId ? data.result : item
+          )))
+          setSelectedResult(data.result)
+          return
+        }
+      } catch {
+        // 后端复核失败时，继续走本地模拟数据逻辑。
+      }
     }
-    updateInspectionResultReview(resultId, reviewStatus)
-    setStoredResults(getInspectionResults())
-    setSelectedResult(null)
-  }
 
-  const handleViewChange = useCallback(({ center, zoom }) => {
-    setMapView({ center, zoom })
-  }, [])
-
-  const resetMapView = () => {
-    // 通过强制重载地图回到初始状态
-    setMapView({ center: [720, 1280], zoom: -1 })
+    const nextResults = updateInspectionResultReview(resultId, reviewStatus)
+    setStoredResults(nextResults)
+    setSelectedResult(nextResults.find((result) => result.id === resultId) || null)
   }
 
   return (
-    <section className="dashboard-hud-page">
-      {/* ======== Leaflet 交互地图 ======== */}
-      <div className="hud-map-stage">
-        <MapContainer
-          center={[720, 1280]}
-          zoom={-1}
-          minZoom={-3}
-          maxZoom={2}
-          crs={pixelCRS}
-          zoomControl={false}
-          attributionControl={false}
-          className="hud-leaflet-map"
-          style={{ width: '100%', height: '100%' }}
-        >
-          <PanZoomController onViewChange={handleViewChange} />
-
-          {/* 卫星底图 */}
-          <ImageOverlay
-            url="/maps/campus-satellite.png"
-            bounds={MAP_BOUNDS}
-          />
-
-          {/* 巡检路线 */}
-          {showRoute && <PatrolRouteLayer />}
-
-          {/* 锚点 */}
-          <AreaLayers areas={seedAreas} />
-
-          {/* 机器人位置 */}
-          <RobotLayer
-            position={[710, 1180]}
-            activeVehicle={summary.activeVehicle}
-          />
-        </MapContainer>
-
-        {/* 地图遮罩渐晕 */}
-        <div className="hud-map-vignette" />
-      </div>
-
-      {/* ======== HUD 浮层面板 ======== */}
-
-      {/* 左上: 时间 */}
-      <section className="hud-clock-panel">
-        <strong>{clock.time}</strong>
-        <span>{clock.date}</span>
-      </section>
-
-      {/* 右上: 指标块 */}
-      <div className="hud-top-metrics">
-        <article className="hud-metric-box">
-          <span>在线机器人</span>
-          <strong>{summary.online}/{summary.total}</strong>
-          <small>车辆未连接，当前显示默认编队</small>
-        </article>
-        <article className="hud-metric-box">
-          <span>AI 识别结果</span>
-          <strong>{summary.aiCount}</strong>
-          <small>识别流已接入控制台</small>
-        </article>
-        <article className="hud-metric-box">
-          <span>异常告警</span>
-          <strong className="tone-danger">{summary.alarmCount}</strong>
-          <small>点击右下角快速复核</small>
-        </article>
-      </div>
-
-      {/* 左侧中段: 任务卡 */}
-      <section className="hud-task-panel">
-        <div className="hud-panel-header">
-          <h2>当前任务</h2>
-          <em>巡检中</em>
-        </div>
-        <div className="hud-task-title">
-          <strong>P线巡检任务</strong>
-          <span>{summary.activeVehicle?.id || 'nano1'}</span>
-        </div>
-        <div className="hud-progress-row">
-          <span>任务进度</span>
-          <b>65%</b>
-        </div>
-        <div className="hud-progress-track">
-          <span style={{ width: '65%' }} />
-        </div>
-        <dl className="hud-task-meta">
-          <div><span>已完成/总点位</span><strong>23/35</strong></div>
-          <div><span>当前点位</span><strong>P23 配电室</strong></div>
-          <div><span>预计完成</span><strong>16:08</strong></div>
-        </dl>
-        <button type="button" className="hud-outline-button" onClick={() => navigate('/cluster-control')}>查看任务详情</button>
-      </section>
-
-      {/* 右侧中段: 工具面板 */}
-      <section className="hud-tools-panel">
-        <div className="hud-panel-header">
-          <h3>地图工具</h3>
-        </div>
-        <div className="hud-icon-toolbar">
-          <button type="button" aria-label="指针" title="指针">⌖</button>
-          <button type="button" aria-label="定位" title="重置视角" onClick={resetMapView}>⌂</button>
-          <button type="button" aria-label="标尺" title="标尺">⌗</button>
-          <button type="button" aria-label="区域" title="区域">▱</button>
-          <button type="button" aria-label="全屏" title="全屏">⛶</button>
-        </div>
-        <div className="hud-layer-panel">
-          <div className="hud-layer-title">图层控制</div>
-          <label>
-            <input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} />
-            建筑标注
-          </label>
-          <label>
-            <input type="checkbox" checked={showRoute} onChange={(e) => setShowRoute(e.target.checked)} />
-            巡检路线
-          </label>
-          <label>
-            <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
-            坐标网格
-          </label>
-        </div>
-        <div className="hud-view-info">
-          <span>视口</span>
-          <small>zoom {mapView.zoom} / {mapView.center[1].toFixed(0)},{mapView.center[0].toFixed(0)}</small>
-        </div>
-      </section>
-
-      {/* 左下: 事件日志 */}
-      <section className="hud-log-panel">
-        <div className="hud-panel-header">
-          <h3>事件日志</h3>
-          <button type="button" className="hud-text-link">更多</button>
-        </div>
-        <div className="hud-log-list">
-          {seedEvents.map((event) => (
-            <div className="hud-log-row" key={`${event.time}-${event.text}`}>
-              <span className={`hud-log-dot tone-${event.type}`} />
-              <time>{event.time}</time>
-              <p>{event.text}</p>
+    <section className="dashboard-page">
+      <div className="dashboard-overview">
+        {dashboardKpis.map((card) => (
+          <article className={`dashboard-kpi-card tone-${card.tone}`} key={card.key}>
+            <span className="kpi-orbit" />
+            <div className="kpi-icon">{card.value}</div>
+            <div className="kpi-copy">
+              <p>{card.label}</p>
+              <strong>{card.value}<em>{card.unit}</em></strong>
+              <small>{card.delta}</small>
             </div>
-          ))}
-        </div>
-      </section>
-
-      {/* 右下: 告警概览 */}
-      <section className="hud-alert-panel">
-        <div className="hud-panel-header">
-          <h3>告警概览</h3>
-          <button type="button" className="hud-text-link">更多</button>
-        </div>
-        <div className="hud-alert-totals">
-          {alertSummary.map((item) => (
-            <article key={item.label} className={`hud-alert-total tone-${item.tone}`}>
-              <strong>{item.value}</strong>
-              <span>{item.label}</span>
-            </article>
-          ))}
-        </div>
-        <div className="hud-alert-list">
-          {displayResults.slice(0, 3).map((result) => (
-            <button type="button" key={result.id} className="hud-alert-row" onClick={() => setSelectedResult(result.source)}>
-              <span>{result.capturedAt === '--' ? '10:18:32' : String(result.capturedAt).slice(11, 19)}</span>
-              <b>{result.title}</b>
-              <em>{result.value}</em>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {/* 三张室内预览卡 (浮动在地图上) */}
-      {seedAreas.map((area) => (
-        <article
-          key={area.id}
-          className={`hud-preview-card tone-${area.statusTone}`}
-          onClick={() => navigate('/cluster-control')}
-        >
-          <div className="hud-preview-head">
-            <strong>{area.title}</strong>
-            <em>{area.status}</em>
-          </div>
-          <img src={area.imageUrl} alt={`${area.title} 室内巡检预览`} />
-          <div className="hud-preview-foot">
-            <span>关键点位: {area.points}</span>
-            <button type="button" onClick={(e) => { e.stopPropagation(); navigate('/cluster-control') }}>进入巡检</button>
-          </div>
-        </article>
-      ))}
-
-      {/* 底部图例 */}
-      <div className="hud-legend-strip">
-        <span><i className="legend-icon robot" />机器人</span>
-        <span><i className="legend-icon route" />巡检路线</span>
-        <span><i className="legend-icon point" />巡检点位</span>
-        <span><i className="legend-icon area" />可巡检区域</span>
+          </article>
+        ))}
       </div>
 
-      {/* 触发识别 */}
-      <button type="button" className="hud-capture-button" onClick={captureRecognition} disabled={isCapturing}>
-        {isCapturing ? '识别中...' : '触发识别'}
-      </button>
-      {captureMessage && <p className="hud-capture-message">{captureMessage}</p>}
+      <div className="dashboard-main-grid">
+        <section className="dashboard-panel mission-panel">
+          <div className="dashboard-panel-heading">
+            <h2>当前巡检任务</h2>
+            <span>{lastUpdated}</span>
+          </div>
+          <div className="mission-content">
+            <dl className="mission-meta">
+              <div><dt>任务名称</dt><dd>{currentMission.name}</dd></div>
+              <div><dt>任务编号</dt><dd>{currentMission.code}</dd></div>
+              <div><dt>巡检路线</dt><dd>{currentMission.route}</dd></div>
+              <div><dt>开始时间</dt><dd>{currentMission.startTime}</dd></div>
+              <div><dt>预计时长</dt><dd>{currentMission.duration}</dd></div>
+            </dl>
+            <div className="mission-progress-block">
+              <div className="mission-progress-label">
+                <span>任务进度</span>
+                <strong>{currentMission.progress}%</strong>
+              </div>
+              <div className="mission-progress-bar">
+                <span style={{ width: `${currentMission.progress}%` }} />
+              </div>
+            </div>
+          </div>
+        </section>
 
-      {/* 弹窗 */}
-      <ResultModal result={selectedResult} onClose={() => setSelectedResult(null)} onReview={handleReviewResult} />
+        <section className="dashboard-panel map-panel">
+          <div className="dashboard-panel-heading">
+            <div>
+              <h2>多地图态势</h2>
+              <span>{dashboardMaps.length} 张地图 / {summary.total} 台车辆</span>
+            </div>
+            <button type="button" className="dashboard-link-button" onClick={() => navigate('/device-control')}>
+              进入遥控台
+            </button>
+          </div>
+
+          <div className="map-stage map-overview-stage" aria-label="多地图态势总览">
+            <div className="map-overview-grid">
+              {dashboardMaps.map((map) => (
+                <article
+                  className={`facility-map-card tone-${map.statusTone}`}
+                  key={map.id}
+                  onClick={() => navigate('/cluster-control')}
+                >
+                  <div className="facility-card-head">
+                    <div>
+                      <strong>{map.name}</strong>
+                      <span>{map.task}</span>
+                    </div>
+                    <em>{map.status}</em>
+                  </div>
+
+                  <div className={`facility-mini-map variant-${map.variant}`}>
+                    <span className="mini-grid" />
+                    <span className="mini-zone zone-main" />
+                    <span className="mini-zone zone-side" />
+                    <span className="mini-rack rack-a" />
+                    <span className="mini-rack rack-b" />
+                    <span className="mini-rack rack-c" />
+                    <span className="mini-route route-a" />
+                    <span className="mini-route route-b" />
+                    <span className="mini-point point-a" />
+                    <span className="mini-point point-b" />
+                    <span className="mini-point point-c" />
+                    <span className="mini-robot" />
+                    {map.anomalies > 0 && (
+                      <span className="mini-anomaly">
+                        {map.currentPoint}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="facility-card-foot">
+                    <span><b>{map.robot}</b> 执行车</span>
+                    <span>{map.pointCount} 点位</span>
+                    <span className={map.anomalies > 0 ? 'map-alert-count is-active' : 'map-alert-count'}>
+                      异常 {map.anomalies}
+                    </span>
+                  </div>
+                  <div className="facility-progress">
+                    <span style={{ width: `${map.progress}%` }} />
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className="map-overview-summary">
+              <span><i className="legend-robot" />车辆位置</span>
+              <span><i className="legend-point" />巡检路线</span>
+              <span><i className="legend-current" />当前地图</span>
+              <span><i className="legend-alarm" />异常点</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="dashboard-panel ai-panel">
+          <div className="dashboard-panel-heading">
+            <h2>AI识别实时结果</h2>
+            <div className="ai-panel-actions">
+              <span>{captureMessage}</span>
+              <button type="button" className="dashboard-text-button" onClick={captureRecognition} disabled={isCapturing}>
+                {isCapturing ? '采集中' : '采集识别'}
+              </button>
+              <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
+                更多
+              </button>
+            </div>
+          </div>
+          <div className="ai-result-list">
+            {dashboardAiResults.map((result) => (
+              <article
+                className={`ai-result-card status-${result.status}${result.source ? ' is-clickable' : ''}`}
+                key={result.id}
+                role={result.source ? 'button' : undefined}
+                tabIndex={result.source ? 0 : undefined}
+                onClick={() => result.source && setSelectedResult(result.source)}
+                onKeyDown={(event) => {
+                  if (!result.source || (event.key !== 'Enter' && event.key !== ' ')) return
+                  event.preventDefault()
+                  setSelectedResult(result.source)
+                }}
+              >
+                <div className="ai-result-stream">
+                  <span className="stream-dot" />
+                  <b>{result.point}</b>
+                  <small>{result.time}</small>
+                </div>
+                <div className={`ai-result-visual visual-${result.visual}`}>
+                  {result.imageUrl ? (
+                    <img className="ai-result-image" src={result.imageUrl} alt={`${result.title} ${result.value}`} />
+                  ) : result.visual === 'target' ? (
+                    <div className="target-detection-mark">
+                      <span />
+                      <b />
+                    </div>
+                  ) : result.visual === 'dial' ? (
+                    <>
+                      <span className="dial-ring" />
+                      <span className="dial-pointer" />
+                      <span className="dial-center" />
+                    </>
+                  ) : (
+                    <div className="digital-display">
+                      <b>0000</b>
+                      <b>3000</b>
+                    </div>
+                  )}
+                </div>
+                <dl className="ai-result-meta">
+                  <div><dt>识别类型</dt><dd>{result.title}</dd></div>
+                  <div><dt>识别值</dt><dd>{result.value}</dd></div>
+                  <div><dt>标准范围</dt><dd>{result.range}</dd></div>
+                  <div><dt>识别状态</dt><dd>{result.status}</dd></div>
+                  <div><dt>置信度</dt><dd>{result.confidence}</dd></div>
+                </dl>
+                <span className={`ai-result-state state-${result.status}`}>{result.status}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="dashboard-panel robot-panel">
+          <div className="dashboard-panel-heading">
+            <h2>机器人状态</h2>
+            <span>{statusText}</span>
+          </div>
+          <div className="robot-profile">
+            <div className="robot-silhouette">
+              <span className="robot-ring" />
+              <div className="robot-shape">
+                <span className="robot-head" />
+                <span className="robot-body" />
+                <span className="robot-wheel left" />
+                <span className="robot-wheel right" />
+              </div>
+            </div>
+            <dl className="robot-stats">
+              <div><dt>机器人编号</dt><dd>{summary.activeVehicle?.id?.toUpperCase() || 'BOT-001'}</dd></div>
+              <div><dt>运行状态</dt><dd className="status-online">{summary.activeVehicle?.online ? '巡检中' : '待命'}</dd></div>
+              <div><dt>实时电量</dt><dd>{summary.activeVehicle?.battery ?? 82}%</dd></div>
+              <div><dt>运行速度</dt><dd>{summary.activeVehicle?.speed ?? 0.8} m/s</dd></div>
+              <div><dt>主电池</dt><dd>{formatVoltage(summary.activeVehicle?.voltage)}</dd></div>
+            </dl>
+          </div>
+        </section>
+      </div>
+
+      <div className="dashboard-bottom-grid">
+        <section className="dashboard-panel points-panel">
+          <div className="dashboard-panel-heading">
+            <h2>巡检点列表</h2>
+            <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
+              更多
+            </button>
+          </div>
+          <div className="points-table">
+            <div className="points-row points-head">
+              <span>序号</span>
+              <span>巡检点名称</span>
+              <span>状态</span>
+              <span>到达时间</span>
+              <span>AI识别结果</span>
+            </div>
+            {inspectionPoints.map((point) => (
+              <div className="points-row" key={point.id}>
+                <span>{point.id}</span>
+                <strong>{point.name}</strong>
+                <em className={`status-${point.status}`}>{point.status}</em>
+                <span>{point.eta}</span>
+                <span>{point.result}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="dashboard-panel logs-panel">
+          <div className="dashboard-panel-heading">
+            <h2>巡检日志</h2>
+            <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
+              更多
+            </button>
+          </div>
+          <div className="logs-content">
+            <div className="timeline">
+              {eventStream.map((event) => (
+                <div className="timeline-item" key={`${event.time}-${event.text}`}>
+                  <span className={`timeline-dot type-${event.type}`} />
+                  <time>{event.time}</time>
+                  <p>{event.text}</p>
+                </div>
+              ))}
+            </div>
+            <div className="logs-robot-preview">
+              <span className="preview-ring" />
+              <div className="robot-shape compact">
+                <span className="robot-head" />
+                <span className="robot-body" />
+                <span className="robot-wheel left" />
+                <span className="robot-wheel right" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="dashboard-panel alerts-panel">
+          <div className="dashboard-panel-heading">
+            <h2>告警信息</h2>
+            <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
+              更多
+            </button>
+          </div>
+          <div className="alerts-list">
+            {dashboardAlarms.map((alarm) => (
+              <article
+                className={`alert-card level-${alarm.level}${alarm.source ? ' is-clickable' : ''}`}
+                key={`${alarm.time}-${alarm.title}`}
+                role={alarm.source ? 'button' : undefined}
+                tabIndex={alarm.source ? 0 : undefined}
+                onClick={() => alarm.source && setSelectedResult(alarm.source)}
+                onKeyDown={(event) => {
+                  if (!alarm.source || (event.key !== 'Enter' && event.key !== ' ')) return
+                  event.preventDefault()
+                  setSelectedResult(alarm.source)
+                }}
+              >
+                <div className="alert-side">
+                  <div className="alert-time">{alarm.time}</div>
+                  <span className="alert-level">{alarm.level}</span>
+                </div>
+                <div className="alert-copy">
+                  <strong>{alarm.title}</strong>
+                  <p>{alarm.detail}</p>
+                </div>
+                <span className="alert-badge">{alarm.state}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <AiResultDetailModal
+        result={selectedResult}
+        onClose={() => setSelectedResult(null)}
+        onReview={handleReviewResult}
+      />
     </section>
   )
 }
