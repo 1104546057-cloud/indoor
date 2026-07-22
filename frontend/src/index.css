@@ -13,14 +13,6 @@
 * {
   /* 让元素宽高计算包含 padding 和 border，布局更容易控制。 */
   box-sizing: border-box;
-  user-select: none;
-  -webkit-user-select: none;
-  -ms-user-select: none;
-  -webkit-touch-callout: none;
-}
-
-::selection {
-  background: transparent;
 }
 
 img,
@@ -49,6 +41,16 @@ button {
 
 a {
   color: inherit;
+}
+
+.route-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: #9edfea;
+  background: #0a2230;
+  font-size: 13px;
+  letter-spacing: 1px;
 }
 
 /* Shared cyan-blue cockpit skin for legacy management pages. */

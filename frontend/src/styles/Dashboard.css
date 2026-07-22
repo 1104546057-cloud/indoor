@@ -8,7 +8,7 @@
   --hud-muted: #84adba;
   --hud-panel: linear-gradient(180deg, rgba(17, 61, 79, 0.8), rgba(7, 24, 37, 0.95));
   display: grid;
-  grid-template-rows: minmax(58px, 7.5vh) minmax(0, 1fr) minmax(118px, 15vh);
+  grid-template-rows: minmax(50px, 6vh) minmax(0, 1fr) minmax(132px, 17vh) auto;
   gap: 8px;
   height: 100%;
   min-height: 0;
@@ -25,18 +25,20 @@
 }
 
 .dashboard-overview {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .dashboard-main-grid {
-  grid-template-columns: minmax(204px, 0.58fr) minmax(0, 3fr) minmax(276px, 0.72fr);
+  grid-template-columns: minmax(0, 3.2fr) minmax(300px, 0.8fr);
+  grid-template-rows: repeat(3, minmax(0, 1fr));
   grid-template-areas:
-    "mission map ai"
-    "robot map ai";
+    "map mission"
+    "map robot"
+    "map ai";
 }
 
 .dashboard-bottom-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.34fr) minmax(292px, 0.74fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .dashboard-panel,
@@ -1481,11 +1483,80 @@
 }
 
 .logs-content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 104px;
-  gap: 10px;
+  display: block;
   min-height: 0;
   overflow: hidden;
+}
+
+.map-overview-grid.has-previews {
+  grid-template-columns: minmax(0, 7fr) minmax(210px, 3fr);
+}
+
+.map-overview-grid.has-previews .facility-map-card.is-active-map {
+  grid-row: 1 / span 4;
+}
+
+.facility-map-card.is-active-map {
+  border-color: rgba(111, 238, 242, 0.34);
+  box-shadow: inset 0 0 30px rgba(54, 213, 223, 0.05), 0 0 18px rgba(54, 213, 223, 0.08);
+}
+
+.facility-map-card.is-map-preview {
+  min-height: 0;
+  padding: 8px;
+  opacity: 0.82;
+}
+
+.map-overview-grid.has-previews .facility-map-card.is-map-preview:nth-child(2):last-child {
+  grid-row: 1 / span 4;
+}
+
+.facility-map-card.is-map-preview .facility-mini-map {
+  min-height: 64px;
+}
+
+.facility-map-card.is-map-preview .facility-card-foot,
+.facility-map-card.is-map-preview .facility-progress {
+  display: none;
+}
+
+.facility-map-card.is-map-preview:hover,
+.facility-map-card.is-map-preview:focus-visible {
+  opacity: 1;
+}
+
+.process-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.process-tabs button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  color: var(--hud-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.process-tabs button span {
+  margin-left: 5px;
+  color: #77d9e9;
+}
+
+.process-tabs button.active {
+  border-color: rgba(111, 222, 239, 0.24);
+  color: #effcff;
+  background: rgba(24, 101, 123, 0.28);
+  box-shadow: inset 0 -2px 0 #42d7e7;
+}
+
+.process-panel .points-table,
+.process-panel .logs-content {
+  flex: 1 1 auto;
 }
 
 .timeline {
@@ -1659,15 +1730,15 @@
 
 @media (max-width: 1600px) {
   .dashboard-page {
-    grid-template-rows: minmax(112px, 15vh) minmax(0, 1fr) minmax(118px, 15vh);
+    grid-template-rows: minmax(86px, 12vh) minmax(0, 1fr) minmax(132px, 18vh) auto;
   }
 
   .dashboard-overview {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .dashboard-main-grid {
-    grid-template-columns: minmax(226px, 0.8fr) minmax(0, 1.7fr) minmax(290px, 0.9fr);
+    grid-template-columns: minmax(0, 2.4fr) minmax(280px, 0.8fr);
   }
 }
 
@@ -1693,6 +1764,14 @@
 
   .dashboard-overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .map-overview-grid.has-previews {
+    grid-template-columns: 1fr;
+  }
+
+  .map-overview-grid.has-previews .facility-map-card.is-active-map {
+    grid-row: auto;
   }
 
   .logs-content,

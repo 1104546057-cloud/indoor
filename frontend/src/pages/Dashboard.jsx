@@ -1,111 +1,21 @@
+/* eslint-disable react/prop-types */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getInspectionResults, subscribeInspectionResults, updateInspectionResultReview } from '../utils/inspectionResults'
+import AlarmWorkflowPanel from '../components/AlarmWorkflowPanel'
+import useBusinessOverview from '../hooks/useBusinessOverview'
 import '../styles/Dashboard.css'
-
-const fallbackVehicles = [
-  { id: 'nano1', name: '巡检车 nano1', status: 'offline', online: false, voltage: null, speed: 0, battery: 82 },
-  { id: 'nano2', name: '巡检车 nano2', status: 'offline', online: false, voltage: null, speed: 0, battery: 76 },
-  { id: 'nano3', name: '巡检车 nano3', status: 'offline', online: false, voltage: null, speed: 0, battery: 71 },
-]
+import '../styles/BusinessModules.css'
 
 const kpiCards = [
-  { key: 'todayTasks', label: '今日巡检任务', value: '6', unit: '个', delta: '较昨日 +20%', tone: 'cyan' },
-  { key: 'completed', label: '已完成巡检', value: '4', unit: '个', delta: '较昨日 +33%', tone: 'blue' },
-  { key: 'completionRate', label: '巡检完成率', value: '66.7', unit: '%', delta: '较昨日 +10%', tone: 'green' },
+  { key: 'taskSummary', label: '任务统计', value: '0/0', unit: '个', delta: '完成率 0%', tone: 'cyan' },
+  { key: 'currentTask', label: '当前任务', value: '空闲', unit: '', delta: '暂无执行任务', tone: 'blue' },
   { key: 'aiRate', label: 'AI识别成功率', value: '98.7', unit: '%', delta: '较昨日 +2.1%', tone: 'violet' },
   { key: 'alarms', label: '异常告警', value: '3', unit: '个', delta: '较昨日 +25%', tone: 'red' },
   { key: 'onlineRobots', label: '在线机器人', value: '1', unit: '台', delta: '电量 82%', tone: 'cyan' },
 ]
 
-const inspectionPoints = [
-  { id: 1, name: '低压配电柜1', status: '已完成', eta: '10:42:15', result: '正常' },
-  { id: 2, name: '变压器温控仪', status: '已完成', eta: '10:45:32', result: '正常' },
-  { id: 3, name: '低压配电柜2', status: '巡检中', eta: '10:48:10', result: '识别中' },
-  { id: 4, name: 'UPS电源柜', status: '待巡检', eta: '--', result: '--' },
-  { id: 5, name: '蓄电池组', status: '待巡检', eta: '--', result: '--' },
-]
-
-const aiResults = [
-  {
-    id: 'meter-1',
-    point: '低压配电柜1',
-    title: '电压表',
-    value: '380 V',
-    range: '380 ± 10 V',
-    time: '10:54:21',
-    confidence: '98.6%',
-    status: '正常',
-    visual: 'dial',
-  },
-  {
-    id: 'meter-2',
-    point: '变压器温控仪',
-    title: '电流表',
-    value: '36.2 A',
-    range: '0 ~ 50 A',
-    time: '10:54:21',
-    confidence: '97.3%',
-    status: '正常',
-    visual: 'digital',
-  },
-]
-
-const eventStream = [
-  { time: '10:42:15', text: '机器人到达巡检点【低压配电柜1】', type: 'done' },
-  { time: '10:42:18', text: '启动 AI 识别，识别类型：仪表 OCR', type: 'scan' },
-  { time: '10:42:21', text: 'AI 识别完成，结果：正常', type: 'done' },
-  { time: '10:42:23', text: '识别图片与原始图上传成功', type: 'upload' },
-  { time: '10:42:25', text: '前往下一个巡检点【变压器温控仪】', type: 'move' },
-  { time: '10:45:32', text: '机器人到达巡检点【变压器温控仪】', type: 'done' },
-]
-
-const alarmFeed = [
-  { time: '10:18:32', title: '低压配电柜2 电流异常', detail: '电流值：63.2 A', level: '高', state: '未处理' },
-  { time: '09:47:11', title: '环境监测 烟雾浓度超标', detail: '烟雾值：35 ppm', level: '中', state: '未处理' },
-  { time: '08:55:24', title: '蓄电池组 温度过高', detail: '温度值：45.6 ℃', level: '中', state: '未处理' },
-]
-
-const facilityMaps = [
-  {
-    id: 'hanlin-1',
-    name: '瀚林1号电房',
-    task: 'P柜巡检任务',
-    robot: 'nano1',
-    status: '执行中',
-    statusTone: 'running',
-    progress: 65,
-    pointCount: 35,
-    currentPoint: 'P33',
-    variant: 'hanlin',
-  },
-  {
-    id: 'hanlin-2',
-    name: '瀚林2号电房',
-    task: '例行巡检待启动',
-    robot: 'nano2',
-    status: '待命',
-    statusTone: 'idle',
-    progress: 0,
-    pointCount: 28,
-    currentPoint: '--',
-    variant: 'compact',
-  },
-  {
-    id: 'distribution-b',
-    name: '配电室B区',
-    task: '夜间复核任务',
-    robot: 'nano3',
-    status: '排队中',
-    statusTone: 'queued',
-    progress: 0,
-    pointCount: 42,
-    currentPoint: '--',
-    variant: 'wide',
-  },
-]
-
 function formatVoltage(value) {
+  if (value == null || value === '') return '--'
   const numeric = Number(value)
   return Number.isFinite(numeric) ? `${numeric.toFixed(1)} V` : '--'
 }
@@ -192,14 +102,16 @@ function AiResultDetailModal({ result, onClose, onReview }) {
 
 function Dashboard() {
   const navigate = useNavigate()
-  const [vehicles, setVehicles] = useState(fallbackVehicles)
+  const { business } = useBusinessOverview({ pollMs: 8000 })
+  const [vehicles, setVehicles] = useState([])
   const [statusText, setStatusText] = useState('等待车辆注册表同步')
   const [lastUpdated, setLastUpdated] = useState('--:--:--')
-  const [storedResults, setStoredResults] = useState(() => getInspectionResults())
   const [backendResults, setBackendResults] = useState([])
   const [selectedResult, setSelectedResult] = useState(null)
   const [isCapturing, setIsCapturing] = useState(false)
   const [captureMessage, setCaptureMessage] = useState('')
+  const [activeMapId, setActiveMapId] = useState(null)
+  const [processTab, setProcessTab] = useState('points')
 
   useEffect(() => {
     let ignore = false
@@ -214,19 +126,15 @@ function Dashboard() {
         const data = await response.json()
         if (ignore) return
 
-        const nextVehicles = data.vehicles?.length ? data.vehicles.map((vehicle, index) => ({
-          speed: [0.8, 0.6, 0.5][index] ?? 0.5,
-          battery: [82, 76, 71][index] ?? 70,
-          ...vehicle,
-        })) : fallbackVehicles
+        const nextVehicles = data.vehicles || []
 
         setVehicles(nextVehicles)
         setStatusText('车辆注册表已同步')
         setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
       } catch {
         if (ignore) return
-        setVehicles(fallbackVehicles)
-        setStatusText('车辆 agent 未连接，显示默认车队')
+        setVehicles([])
+        setStatusText('车辆注册表读取失败')
         setLastUpdated(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
       }
     }
@@ -239,8 +147,6 @@ function Dashboard() {
       window.clearInterval(timer)
     }
   }, [])
-
-  useEffect(() => subscribeInspectionResults(setStoredResults), [])
 
   useEffect(() => {
     let ignore = false
@@ -302,7 +208,7 @@ function Dashboard() {
   const summary = useMemo(() => {
     const total = vehicles.length
     const online = vehicles.filter((vehicle) => vehicle.online).length
-    const activeVehicle = vehicles.find((vehicle) => vehicle.online) || vehicles[0] || fallbackVehicles[0]
+    const activeVehicle = vehicles.find((vehicle) => vehicle.online) || vehicles[0] || null
 
     return {
       total,
@@ -313,9 +219,7 @@ function Dashboard() {
     }
   }, [vehicles])
 
-  const recognitionSource = useMemo(() => (
-    backendResults.length ? backendResults : storedResults
-  ), [backendResults, storedResults])
+  const recognitionSource = backendResults
 
   const anomalyResults = useMemo(() => (
     recognitionSource.filter((result) => result.status === '异常' || result.status === '告警')
@@ -328,16 +232,32 @@ function Dashboard() {
   const dashboardKpis = useMemo(() => {
     const normalCount = recognitionSource.filter((result) => result.status === '正常').length
     const aiRate = recognitionSource.length ? ((normalCount / recognitionSource.length) * 100).toFixed(1) : null
+    const completedRecords = business.records.filter((record) => record.status === 'completed').length
+    const completionRate = business.records.length ? ((completedRecords / business.records.length) * 100).toFixed(1) : '0.0'
+    const openAlarmCount = business.alarms.filter((alarm) => alarm.status !== '已关闭').length
 
     return kpiCards.map((card) => {
-      if (card.key === 'aiRate' && aiRate) {
-        return { ...card, value: aiRate, delta: `已识别 ${recognitionSource.length} 条` }
+      if (card.key === 'taskSummary') return { ...card, value: `${completedRecords}/${business.records.length}`, delta: `完成率 ${completionRate}%` }
+      if (card.key === 'currentTask') {
+        const runningRecord = business.records.find((record) => ['dispatching', 'running'].includes(record.status))
+        return {
+          ...card,
+          value: runningRecord ? '执行中' : '空闲',
+          delta: runningRecord?.taskName || '暂无执行任务',
+        }
+      }
+      if (card.key === 'aiRate') {
+        return {
+          ...card,
+          value: aiRate || '--',
+          delta: recognitionSource.length ? `已识别 ${recognitionSource.length} 条` : '等待真实 AI 结果',
+        }
       }
       if (card.key === 'alarms') {
         return {
           ...card,
-          value: String(anomalyResults.length),
-          delta: pendingReviewCount ? `待复核 ${pendingReviewCount} 条` : '暂无待复核',
+          value: String(openAlarmCount),
+          delta: openAlarmCount ? '等待告警闭环' : '暂无未关闭告警',
         }
       }
       if (card.key === 'onlineRobots') {
@@ -349,48 +269,79 @@ function Dashboard() {
       }
       return card
     })
-  }, [anomalyResults.length, pendingReviewCount, recognitionSource, summary.online, summary.total])
+  }, [business.alarms, business.records, recognitionSource, summary.online, summary.total])
 
   const dashboardAiResults = useMemo(() => (
-    recognitionSource.length ? recognitionSource.slice(0, 5).map(mapStoredResultToDashboard) : aiResults
+    recognitionSource.slice(0, 5).map(mapStoredResultToDashboard)
   ), [recognitionSource])
 
-  const dashboardAlarms = useMemo(() => (
-    anomalyResults.length
-      ? anomalyResults.slice(0, 5).map((result) => ({
-        time: extractTime(result.capturedAt),
-        title: `${result.targetName || result.pointId} ${result.summary || result.recognitionType || '识别异常'}`,
-        detail: `${result.recognitionType || '识别值'}：${result.value || '--'} / 置信度 ${result.confidence || '--'}`,
-        level: result.level === 'alarm' ? '高' : '中',
-        state: result.reviewStatus || '待复核',
-        source: result,
-      }))
-      : alarmFeed
-  ), [anomalyResults])
+  const activeRecord = business.records.find((record) => ['dispatching', 'running'].includes(record.status)) || business.records[0]
+  const currentMission = activeRecord ? {
+    name: activeRecord.taskName || '实车巡检任务',
+    code: activeRecord.taskId || activeRecord.recordCode,
+    route: activeRecord.routeName || '--',
+    startTime: extractTime(activeRecord.startedAt),
+    duration: activeRecord.status,
+    progress: activeRecord.progress,
+  } : { name: '暂无执行任务', code: '--', route: '--', startTime: '--', duration: '--', progress: 0 }
 
-  const dashboardMaps = useMemo(() => (
-    facilityMaps.map((map) => {
-      if (map.id !== 'hanlin-1') {
-        return { ...map, anomalies: 0, pendingReview: 0 }
-      }
+  const dashboardMaps = useMemo(() => business.rooms.map((room, index) => {
+    const route = business.routes.find((item) => item.roomId === room.id)
+    const record = business.records.find((item) => item.routeName === route?.name)
+    const robotName = record?.robotName || summary.activeVehicle?.name || summary.activeVehicle?.id || '未绑定实车'
+    const isRunning = record && ['dispatching', 'running'].includes(record.status)
+    return {
+      id: room.id,
+      name: room.name,
+      task: record?.taskName || route?.name || '尚未配置巡检路线',
+      robot: robotName,
+      status: isRunning ? '执行中' : route ? '待下发' : '未配置',
+      statusTone: isRunning ? 'running' : route ? 'idle' : 'queued',
+      progress: record?.progress || 0,
+      pointCount: route?.points?.length || 0,
+      currentPoint: recognitionSource[0]?.pointId || '--',
+      variant: ['hanlin', 'compact', 'wide'][index % 3],
+      anomalies: business.alarms.filter((alarm) => alarm.status !== '已关闭').length,
+      pendingReview: pendingReviewCount,
+    }
+  }), [business.alarms, business.records, business.rooms, business.routes, pendingReviewCount, recognitionSource, summary.activeVehicle])
 
+  const resolvedActiveMapId = activeMapId && dashboardMaps.some((map) => map.id === activeMapId)
+    ? activeMapId
+    : dashboardMaps.find((map) => map.statusTone === 'running')?.id || dashboardMaps[0]?.id
+
+  const orderedDashboardMaps = useMemo(() => {
+    if (!resolvedActiveMapId) return dashboardMaps
+    return [...dashboardMaps].sort((a, b) => Number(b.id === resolvedActiveMapId) - Number(a.id === resolvedActiveMapId))
+  }, [dashboardMaps, resolvedActiveMapId])
+
+  const inspectionPoints = useMemo(() => {
+    const route = business.routes.find((item) => item.name === activeRecord?.routeName) || business.routes[0]
+    return (route?.points || business.points).map((point, index) => {
+      const result = recognitionSource.find((item) => item.targetName === point.name || item.pointId === point.pointCode)
+      const sequence = index + 1
+      const status = !activeRecord
+        ? '待巡检'
+        : sequence < activeRecord.currentSequence
+          ? '已完成'
+          : sequence === activeRecord.currentSequence && ['dispatching', 'running'].includes(activeRecord.status)
+            ? '巡检中'
+            : '待巡检'
       return {
-        ...map,
-        anomalies: anomalyResults.length,
-        pendingReview: pendingReviewCount,
-        currentPoint: recognitionSource[0]?.pointId || map.currentPoint,
+        id: point.id,
+        name: point.name,
+        status,
+        eta: extractTime(result?.capturedAt),
+        result: result?.status || '--',
       }
     })
-  ), [anomalyResults.length, pendingReviewCount, recognitionSource])
+  }, [activeRecord, business.points, business.routes, recognitionSource])
 
-  const currentMission = {
-    name: '上午例行巡检',
-    code: 'TASK20200617001',
-    route: '1号配电房_主线路',
-    startTime: '08:30:00',
-    duration: '60 分钟',
-    progress: 65,
-  }
+  const eventStream = useMemo(() => business.records.slice(0, 8).map((record) => ({
+    time: extractTime(record.startedAt || record.finishedAt),
+    text: `${record.taskName || record.recordCode} · ${record.routeName || '未关联路线'} · ${record.status}`,
+    type: record.status === 'completed' ? 'done' : record.status === 'failed' ? 'upload' : 'move',
+  })), [business.records])
 
   const handleReviewResult = async (resultId, reviewStatus) => {
     const backendResult = backendResults.find((result) => String(result.resultId || result.id) === String(resultId))
@@ -411,13 +362,11 @@ function Dashboard() {
           return
         }
       } catch {
-        // 后端复核失败时，继续走本地模拟数据逻辑。
+        // 后端复核失败时，继续更新浏览器内的缓存结果。
       }
     }
 
-    const nextResults = updateInspectionResultReview(resultId, reviewStatus)
-    setStoredResults(nextResults)
-    setSelectedResult(nextResults.find((result) => result.id === resultId) || null)
+    setSelectedResult(null)
   }
 
   return (
@@ -474,12 +423,22 @@ function Dashboard() {
           </div>
 
           <div className="map-stage map-overview-stage" aria-label="多地图态势总览">
-            <div className="map-overview-grid">
-              {dashboardMaps.map((map) => (
+            <div className={`map-overview-grid${dashboardMaps.length > 1 ? ' has-previews' : ''}`}>
+              {dashboardMaps.length === 0 ? <div className="business-empty">尚未建立电房档案</div> : null}
+              {orderedDashboardMaps.map((map) => (
                 <article
-                  className={`facility-map-card tone-${map.statusTone}`}
+                  className={`facility-map-card tone-${map.statusTone}${map.id === resolvedActiveMapId ? ' is-active-map' : ' is-map-preview'}`}
                   key={map.id}
-                  onClick={() => navigate('/cluster-control')}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`切换到${map.name}`}
+                  onClick={() => setActiveMapId(map.id)}
+                  onDoubleClick={() => navigate('/cluster-control')}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    setActiveMapId(map.id)
+                  }}
                 >
                   <div className="facility-card-head">
                     <div>
@@ -546,6 +505,7 @@ function Dashboard() {
             </div>
           </div>
           <div className="ai-result-list">
+            {dashboardAiResults.length === 0 ? <div className="business-empty">等待真实车辆或 NX 服务上报识别结果</div> : null}
             {dashboardAiResults.map((result) => (
               <article
                 className={`ai-result-card status-${result.status}${result.source ? ' is-clickable' : ''}`}
@@ -614,10 +574,10 @@ function Dashboard() {
               </div>
             </div>
             <dl className="robot-stats">
-              <div><dt>机器人编号</dt><dd>{summary.activeVehicle?.id?.toUpperCase() || 'BOT-001'}</dd></div>
+              <div><dt>机器人编号</dt><dd>{summary.activeVehicle?.id?.toUpperCase() || '--'}</dd></div>
               <div><dt>运行状态</dt><dd className="status-online">{summary.activeVehicle?.online ? '巡检中' : '待命'}</dd></div>
-              <div><dt>实时电量</dt><dd>{summary.activeVehicle?.battery ?? 82}%</dd></div>
-              <div><dt>运行速度</dt><dd>{summary.activeVehicle?.speed ?? 0.8} m/s</dd></div>
+              <div><dt>实时电量</dt><dd>{summary.activeVehicle?.battery != null ? `${summary.activeVehicle.battery}%` : '--'}</dd></div>
+              <div><dt>运行速度</dt><dd>{summary.activeVehicle?.speed != null ? `${summary.activeVehicle.speed} m/s` : '--'}</dd></div>
               <div><dt>主电池</dt><dd>{formatVoltage(summary.activeVehicle?.voltage)}</dd></div>
             </dl>
           </div>
@@ -625,14 +585,21 @@ function Dashboard() {
       </div>
 
       <div className="dashboard-bottom-grid">
-        <section className="dashboard-panel points-panel">
+        <section className="dashboard-panel process-panel">
           <div className="dashboard-panel-heading">
-            <h2>巡检点列表</h2>
+            <div className="process-tabs" role="tablist" aria-label="巡检过程">
+              <button type="button" role="tab" aria-selected={processTab === 'points'} className={processTab === 'points' ? 'active' : ''} onClick={() => setProcessTab('points')}>
+                巡检点 <span>{inspectionPoints.length}</span>
+              </button>
+              <button type="button" role="tab" aria-selected={processTab === 'logs'} className={processTab === 'logs' ? 'active' : ''} onClick={() => setProcessTab('logs')}>
+                巡检日志 <span>{eventStream.length}</span>
+              </button>
+            </div>
             <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
               更多
             </button>
           </div>
-          <div className="points-table">
+          {processTab === 'points' ? <div className="points-table" role="tabpanel">
             <div className="points-row points-head">
               <span>序号</span>
               <span>巡检点名称</span>
@@ -640,6 +607,7 @@ function Dashboard() {
               <span>到达时间</span>
               <span>AI识别结果</span>
             </div>
+            {inspectionPoints.length === 0 ? <div className="business-empty">尚未配置正式巡检点</div> : null}
             {inspectionPoints.map((point) => (
               <div className="points-row" key={point.id}>
                 <span>{point.id}</span>
@@ -649,18 +617,9 @@ function Dashboard() {
                 <span>{point.result}</span>
               </div>
             ))}
-          </div>
-        </section>
-
-        <section className="dashboard-panel logs-panel">
-          <div className="dashboard-panel-heading">
-            <h2>巡检日志</h2>
-            <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
-              更多
-            </button>
-          </div>
-          <div className="logs-content">
+          </div> : <div className="logs-content" role="tabpanel">
             <div className="timeline">
+              {eventStream.length === 0 ? <div className="business-empty">尚无实车巡检记录</div> : null}
               {eventStream.map((event) => (
                 <div className="timeline-item" key={`${event.time}-${event.text}`}>
                   <span className={`timeline-dot type-${event.type}`} />
@@ -669,53 +628,11 @@ function Dashboard() {
                 </div>
               ))}
             </div>
-            <div className="logs-robot-preview">
-              <span className="preview-ring" />
-              <div className="robot-shape compact">
-                <span className="robot-head" />
-                <span className="robot-body" />
-                <span className="robot-wheel left" />
-                <span className="robot-wheel right" />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="dashboard-panel alerts-panel">
-          <div className="dashboard-panel-heading">
-            <h2>告警信息</h2>
-            <button type="button" className="dashboard-text-button" onClick={() => navigate('/cluster-control')}>
-              更多
-            </button>
-          </div>
-          <div className="alerts-list">
-            {dashboardAlarms.map((alarm) => (
-              <article
-                className={`alert-card level-${alarm.level}${alarm.source ? ' is-clickable' : ''}`}
-                key={`${alarm.time}-${alarm.title}`}
-                role={alarm.source ? 'button' : undefined}
-                tabIndex={alarm.source ? 0 : undefined}
-                onClick={() => alarm.source && setSelectedResult(alarm.source)}
-                onKeyDown={(event) => {
-                  if (!alarm.source || (event.key !== 'Enter' && event.key !== ' ')) return
-                  event.preventDefault()
-                  setSelectedResult(alarm.source)
-                }}
-              >
-                <div className="alert-side">
-                  <div className="alert-time">{alarm.time}</div>
-                  <span className="alert-level">{alarm.level}</span>
-                </div>
-                <div className="alert-copy">
-                  <strong>{alarm.title}</strong>
-                  <p>{alarm.detail}</p>
-                </div>
-                <span className="alert-badge">{alarm.state}</span>
-              </article>
-            ))}
-          </div>
+          </div>}
         </section>
       </div>
+
+      <AlarmWorkflowPanel compact />
 
       <AiResultDetailModal
         result={selectedResult}
