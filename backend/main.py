@@ -1,6 +1,8 @@
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import jwt
 from dotenv import load_dotenv
@@ -12,8 +14,19 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 try:
+    from .business_router import create_business_router
     from .database import Base, engine, get_db
-    from .models import InspectionTask, InspectionTaskRoutePoint, RecognitionResult, User
+    from .inspection_service import apply_threshold_rules
+    from .models import (
+        ImageRecord,
+        InspectionPoint,
+        InspectionRecord,
+        InspectionTask,
+        InspectionTaskRoutePoint,
+        RecognitionResult,
+        SystemLog,
+        User,
+    )
     from .recognition_client import (
         capture_recognition,
         get_recognition_detections,
@@ -34,8 +47,19 @@ try:
         stop_vehicle,
     )
 except ImportError:
+    from business_router import create_business_router
     from database import Base, engine, get_db
-    from models import InspectionTask, InspectionTaskRoutePoint, RecognitionResult, User
+    from inspection_service import apply_threshold_rules
+    from models import (
+        ImageRecord,
+        InspectionPoint,
+        InspectionRecord,
+        InspectionTask,
+        InspectionTaskRoutePoint,
+        RecognitionResult,
+        SystemLog,
+        User,
+    )
     from recognition_client import (
         capture_recognition,
         get_recognition_detections,
@@ -68,10 +92,19 @@ JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'dwc-default-secret-key')
 JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES', '1440'))
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # 旧开发库可显式开启兼容建表；常规环境由 Alembic 管理结构版本。
+    if os.getenv('AUTO_CREATE_TABLES', 'false').lower() in {'1', 'true', 'yes'}:
+        Base.metadata.create_all(bind=engine)
+    yield
+
+
 app = FastAPI(
     title="Indoor Inspection Robot Management Platform",
     description="Backend API for indoor inspection robot management platform.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # 开发环境允许 Vite 前端访问 FastAPI 后端，并允许浏览器携带 Cookie。
@@ -87,11 +120,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def create_missing_tables():
-    Base.metadata.create_all(bind=engine)
 
 
 class LoginRequest(BaseModel):
@@ -113,6 +141,19 @@ class CurrentUserResponse(BaseModel):
     username: str
     nickname: str
     role: str
+
+
+class SystemUserCreate(BaseModel):
+    username: str
+    password: str
+    nickname: str
+    role: str = 'operator'
+
+
+class SystemUserUpdate(BaseModel):
+    nickname: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
 
 
 class VehicleControlRequest(BaseModel):
@@ -192,6 +233,8 @@ class RecognitionResultCreate(BaseModel):
     recognitionType: str | None = None
     value: str | None = None
     recognition_value: str | None = None
+    numeric_value: float | None = None
+    numericValue: float | None = None
     recognition_state: str | None = None
     unit: str | None = None
     standard_range: str | None = None
@@ -251,6 +294,10 @@ def get_current_user(
     return user
 
 
+# 业务资源模块共享现有 Cookie/JWT 鉴权，不另外复制一套登录逻辑。
+app.include_router(create_business_router(get_current_user))
+
+
 @app.get("/")
 async def root():
     # 根接口用于快速确认后端服务已经启动。
@@ -297,6 +344,15 @@ async def login(request: LoginRequest, response: Response, db: Session = Depends
         secure=False,  # 仅限 HTTP 开发环境；生产环境使用 HTTPS 时应改为 True。
     )
 
+    db.add(SystemLog(
+        user_id=user.id,
+        username=user.username,
+        module='认证',
+        action='登录系统',
+        content='用户登录成功',
+    ))
+    db.commit()
+
     return LoginResponse(
         message="登录成功",
         username=user.username,
@@ -313,6 +369,109 @@ async def get_me(current_user: User = Depends(get_current_user)):
         nickname=current_user.nickname,
         role=current_user.role,
     )
+
+
+def _require_admin(user: User) -> None:
+    if user.role != 'admin':
+        raise HTTPException(status_code=403, detail='仅系统管理员可执行该操作')
+
+
+def _system_user_json(user: User) -> dict:
+    return {
+        'id': user.id,
+        'username': user.username,
+        'nickname': user.nickname,
+        'role': user.role,
+        'isActive': user.is_active,
+        'createdAt': user.created_at.isoformat(sep=' ') if user.created_at else None,
+        'updatedAt': user.updated_at.isoformat(sep=' ') if user.updated_at else None,
+    }
+
+
+@app.get('/api/system/users')
+def list_system_users(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return {'users': [_system_user_json(user) for user in db.query(User).order_by(User.id).all()]}
+
+
+@app.post('/api/system/users')
+def create_system_user(
+    payload: SystemUserCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_admin(current_user)
+    username = payload.username.strip()
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=409, detail='用户名已存在')
+    user = User(
+        username=username,
+        password_hash=password_context.hash(payload.password),
+        nickname=payload.nickname.strip() or username,
+        role=payload.role,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    db.add(SystemLog(
+        user_id=getattr(current_user, 'id', None),
+        username=current_user.username,
+        module='系统管理',
+        action='新增用户',
+        content=f'新增账号 {username}，角色 {payload.role}',
+    ))
+    db.commit()
+    db.refresh(user)
+    return _system_user_json(user)
+
+
+@app.patch('/api/system/users/{user_id}')
+def update_system_user(
+    user_id: int,
+    payload: SystemUserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_admin(current_user)
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail='用户不存在')
+    if payload.nickname is not None:
+        user.nickname = payload.nickname.strip() or user.username
+    if payload.role is not None:
+        user.role = payload.role
+    if payload.is_active is not None:
+        if user.id == getattr(current_user, 'id', None) and not payload.is_active:
+            raise HTTPException(status_code=409, detail='不能禁用当前登录账号')
+        user.is_active = payload.is_active
+    db.add(SystemLog(
+        user_id=getattr(current_user, 'id', None),
+        username=current_user.username,
+        module='系统管理',
+        action='更新用户',
+        content=f'更新账号 {user.username}',
+    ))
+    db.commit()
+    db.refresh(user)
+    return _system_user_json(user)
+
+
+@app.get('/api/system/logs')
+def list_system_logs(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    logs = db.query(SystemLog).order_by(SystemLog.created_at.desc()).limit(min(max(limit, 1), 500)).all()
+    return {'logs': [{
+        'id': log.id,
+        'username': log.username,
+        'module': log.module,
+        'action': log.action,
+        'content': log.content,
+        'ipAddress': log.ip_address,
+        'result': log.result,
+        'createdAt': log.created_at.isoformat(sep=' ') if log.created_at else None,
+    } for log in logs]}
 
 
 def _pick(payload: RecognitionResultCreate, snake_name: str, camel_name: str | None = None):
@@ -484,27 +643,73 @@ def delete_task(
 def create_recognition_result(payload: RecognitionResultCreate, db: Session = Depends(get_db)):
     # 第一版作为内网接收接口，允许 NX 推理节点直接上报；后续可以增加 API Key。
     raw_payload = payload.model_dump(mode='json')
+    task_id = _pick(payload, 'task_id', 'taskId')
+    point_code = _pick(payload, 'point_id', 'pointId')
+    image_url = _pick(payload, 'image_url', 'imageUrl')
+    record = None
+    point = None
+    image = None
+    if task_id:
+        record = (
+            db.query(InspectionRecord)
+            .filter(InspectionRecord.task_id == task_id)
+            .order_by(InspectionRecord.created_at.desc())
+            .first()
+        )
+    if point_code:
+        point = db.query(InspectionPoint).filter(InspectionPoint.point_code == point_code).first()
+    if record and image_url:
+        image = (
+            db.query(ImageRecord)
+            .filter(ImageRecord.record_id == record.id, ImageRecord.file_url == image_url)
+            .first()
+        )
+        if image is None:
+            image_sequence = (
+                db.query(ImageRecord)
+                .filter(ImageRecord.record_id == record.id, ImageRecord.point_id == (point.id if point else None))
+                .count()
+                + 1
+            )
+            image = ImageRecord(
+                image_code=f'IMG-{record.id}-{image_sequence}-{uuid4().hex[:6].upper()}',
+                record_id=record.id,
+                point_id=point.id if point else None,
+                cabinet_id=point.cabinet_id if point else None,
+                image_type='visible',
+                sequence=image_sequence,
+                file_url=image_url,
+                captured_at=_pick(payload, 'captured_at', 'capturedAt') or datetime.now(),
+            )
+            db.add(image)
+            db.flush()
+
     result = RecognitionResult(
-        task_id=_pick(payload, 'task_id', 'taskId'),
+        task_id=task_id,
         robot_id=_pick(payload, 'robot_id', 'robotId'),
         room_code=_pick(payload, 'room_code', 'roomCode'),
         cabinet_code=_pick(payload, 'cabinet_code', 'cabinetCode'),
-        point_id=_pick(payload, 'point_id', 'pointId'),
+        point_id=point_code,
         item_code=_pick(payload, 'item_code', 'itemCode'),
         target_name=_pick(payload, 'target_name', 'targetName'),
         recognition_type=_pick(payload, 'recognition_type', 'recognitionType'),
         recognition_value=payload.recognition_value or payload.value,
+        numeric_value=payload.numeric_value if payload.numeric_value is not None else payload.numericValue,
         recognition_state=payload.recognition_state,
         unit=payload.unit,
         standard_range=_pick(payload, 'standard_range', 'standardRange'),
         confidence=payload.confidence,
         status=payload.status or '正常',
-        image_url=_pick(payload, 'image_url', 'imageUrl'),
+        image_url=image_url,
+        inspection_record_id=record.id if record else None,
+        image_id=image.id if image else None,
         captured_at=_pick(payload, 'captured_at', 'capturedAt') or datetime.now(),
         raw_data=raw_payload,
         review_status='待复核' if (payload.status or '正常') in ['异常', '告警'] else '无需复核',
     )
     db.add(result)
+    db.flush()
+    apply_threshold_rules(db, result)
     db.commit()
     db.refresh(result)
     return {'message': 'AI识别结果已入库', 'result': _serialize_recognition_result(result)}

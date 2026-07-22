@@ -1,0 +1,117 @@
+.business-module-loading,
+.business-empty { min-height: 140px; display: grid; place-items: center; color: #79aab6; border: 1px dashed rgba(158, 223, 234, .18); }
+.business-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; color: #bdebf2; border: 1px solid rgba(158, 223, 234, .24); background: rgba(17, 76, 95, .54); }
+.business-notice.danger { color: #ffb2bc; border-color: rgba(255, 113, 130, .32); }
+.business-notice button { color: inherit; border: 0; background: transparent; }
+.business-panel-title { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.business-panel-title div { display: flex; flex-direction: column; }
+.business-panel-title span { color: #6bb9cc; font: 700 9px "Courier New", monospace; letter-spacing: 1.2px; }
+.business-panel-title h2 { margin: 4px 0 0; color: #edfdff; font-size: 15px; }
+.business-panel-title > b { color: #9edfea; font: 700 11px "Courier New", monospace; }
+.business-panel-title > b.online { color: #65e6b8; }
+.business-panel-title > b.offline { color: #ff8291; }
+.business-resource-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(420px, .8fr) minmax(450px, 1.2fr); gap: 14px; }
+.business-resource-form,
+.business-resource-list,
+.business-module-panel,
+.alarm-workflow-module { min-height: 0; padding: 16px; border: 1px solid rgba(158, 223, 234, .26); border-radius: 7px; background: linear-gradient(145deg, rgba(18, 70, 90, .78), rgba(5, 25, 43, .94)); box-shadow: inset 0 0 22px rgba(158, 223, 234, .04); }
+.business-resource-form,
+.business-route-form { display: grid; align-content: start; gap: 10px; }
+.business-resource-form label,
+.business-route-form label { display: grid; gap: 5px; color: #8bb9c3; font-size: 10px; }
+.business-resource-form input,
+.business-resource-form select,
+.business-route-form input,
+.business-route-form select { width: 100%; min-height: 34px; padding: 0 9px; color: #e7fbff; border: 1px solid rgba(158, 223, 234, .2); background: rgba(5, 35, 50, .72); }
+.business-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.business-form-row.four { grid-template-columns: repeat(4, 1fr); }
+.business-primary,
+.formal-route-list button,
+.business-alarm-list aside button { min-height: 34px; padding: 0 13px; color: #f4ffff; border: 1px solid #83d1df; border-radius: 4px; background: linear-gradient(180deg, rgba(58, 139, 160, .74), rgba(18, 76, 94, .82)); font-weight: 800; }
+.business-primary:disabled,
+.formal-route-list button:disabled { cursor: not-allowed; opacity: .4; }
+.business-form-message { margin: 0; color: #9edfea; font-size: 10px; }
+.business-master-list { max-height: calc(100% - 58px); display: grid; gap: 8px; overflow: auto; }
+.business-master-list article { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 11px; border: 1px solid rgba(158, 223, 234, .12); border-radius: 5px; background: rgba(5, 38, 54, .58); }
+.business-master-list article > span { color: #75bfd2; font: 700 10px "Courier New", monospace; }
+.business-master-list article div { display: flex; min-width: 0; flex-direction: column; }
+.business-master-list strong { font-size: 12px; }
+.business-master-list small { margin-top: 3px; color: #86afb9; font-size: 9px; }
+.business-master-list p { margin: 5px 0 0; color: #648e99; font-size: 9px; }
+.route-management-module { display: grid; gap: 14px; }
+.route-module-top,
+.route-module-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.business-toggle { display: flex !important; flex-direction: row !important; gap: 5px; }
+.business-toggle button { min-height: 29px; color: #83aeb8; border: 1px solid rgba(158, 223, 234, .16); background: rgba(5, 36, 52, .5); }
+.business-toggle button.active { color: #fff; border-color: #9edfea; }
+.route-vehicle-line { display: flex; flex-direction: column; margin-bottom: 10px; padding: 10px; border: 1px solid rgba(158, 223, 234, .13); background: rgba(5, 36, 52, .54); }
+.route-vehicle-line strong { font-size: 12px; }
+.route-vehicle-line span { margin-top: 4px; color: #6f9aa4; font: 9px "Courier New", monospace; }
+.formal-route-list { display: grid; gap: 8px; }
+.formal-route-list article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid rgba(158, 223, 234, .13); background: rgba(5, 36, 52, .58); }
+.formal-route-list article div { display: flex; min-width: 0; flex-direction: column; }
+.formal-route-list span { color: #75bfd2; font: 9px "Courier New", monospace; }
+.formal-route-list strong { margin-top: 3px; font-size: 12px; }
+.formal-route-list small { margin-top: 4px; overflow: hidden; color: #688f99; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.business-record-list { display: grid; gap: 7px; }
+.business-record-list > p { color: #769fab; text-align: center; }
+.business-record-list article { display: grid; grid-template-columns: 1fr 100px 42px; align-items: center; gap: 9px; padding: 9px; border-bottom: 1px solid rgba(158, 223, 234, .1); }
+.business-record-list article div { display: flex; flex-direction: column; }
+.business-record-list article strong { font-size: 10px; }
+.business-record-list article span { margin-top: 3px; color: #719ba5; font-size: 9px; }
+.business-record-list article > i { height: 5px; overflow: hidden; border-radius: 3px; background: rgba(158, 223, 234, .1); }
+.business-record-list article > i b { display: block; height: 100%; background: #65e6b8; }
+.business-record-list article em { color: #9edfea; font: 9px "Courier New", monospace; font-style: normal; }
+.business-image-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.business-image-grid figure { min-width: 0; margin: 0; overflow: hidden; border: 1px solid rgba(158, 223, 234, .13); background: #061d2a; }
+.business-image-grid img { width: 100%; height: 74px; display: block; object-fit: cover; }
+.business-image-grid figcaption { padding: 5px; color: #7098a2; font-size: 8px; }
+.alarm-workflow-module { margin-top: 14px; }
+.alarm-workflow-module.compact { margin-top: 0; }
+.alarm-workflow-module.empty-state { min-height: 62px; display: grid; grid-template-columns: minmax(300px, auto) 1fr; align-items: center; gap: 20px; padding-block: 8px; }
+.alarm-workflow-module.empty-state .business-panel-title { min-height: 44px; margin-bottom: 0; }
+.alarm-workflow-module.empty-state .business-empty { min-height: 0; justify-content: end; border: 0; text-align: right; }
+.business-alarm-list { display: grid; gap: 8px; }
+.business-alarm-list article { display: grid; grid-template-columns: 52px 1fr 105px; gap: 11px; padding: 11px; border: 1px solid rgba(158, 223, 234, .12); background: rgba(5, 36, 52, .58); }
+.business-alarm-level { align-self: start; padding: 5px; color: #ffc18c; border: 1px solid rgba(255, 177, 92, .3); text-align: center; font-size: 9px; }
+.business-alarm-level.level-重要 { color: #ff98a5; border-color: rgba(255, 100, 120, .34); }
+.business-alarm-list article > div { display: flex; min-width: 0; flex-direction: column; }
+.business-alarm-list small { color: #6f9da8; font: 8px "Courier New", monospace; }
+.business-alarm-list strong { margin-top: 4px; font-size: 11px; }
+.business-alarm-list p { margin: 4px 0 7px; color: #8cafb8; font-size: 9px; }
+.business-alarm-history { display: flex; flex-wrap: wrap; gap: 4px; }
+.business-alarm-history i { padding: 3px 5px; color: #83b2bd; border: 1px solid rgba(158, 223, 234, .13); font-size: 8px; font-style: normal; }
+.business-alarm-list aside { display: flex; align-items: flex-end; flex-direction: column; justify-content: center; gap: 7px; }
+.business-alarm-list aside > b { color: #ffb2bc; font-size: 10px; }
+.business-alarm-list aside em { color: #65bfa1; font-size: 9px; font-style: normal; }
+@media (max-width: 1180px) {
+  .business-resource-grid,
+  .route-module-top,
+  .route-module-bottom { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .business-form-row,
+  .business-form-row.four { grid-template-columns: 1fr; }
+  .business-image-grid { grid-template-columns: repeat(2, 1fr); }
+  .business-alarm-list article { grid-template-columns: 1fr; }
+  .business-alarm-list aside { align-items: flex-start; }
+  .alarm-workflow-module.empty-state { grid-template-columns: 1fr; gap: 4px; }
+  .alarm-workflow-module.empty-state .business-empty { justify-content: start; text-align: left; }
+}
+.alarm-clear-state {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #8fcfdd;
+}
+
+.alarm-clear-state span,
+.alarm-clear-state strong {
+  color: #6de7b0;
+}
+
+.alarm-clear-state small {
+  color: #8fcfdd;
+}

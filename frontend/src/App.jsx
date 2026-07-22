@@ -1,43 +1,21 @@
-import { useEffect } from 'react'
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
 import MainLayout from './layouts/MainLayout'
-import ClusterControl from './pages/ClusterControl'
-import ClusterManagement from './pages/ClusterManagement'
-import Dashboard from './pages/Dashboard'
-import DeviceControl from './pages/DeviceControl'
-import DeviceManagement from './pages/DeviceManagement'
 import Login from './pages/Login'
-import PatrolExecution3D from './pages/PatrolExecution3D'
-import UserManagement from './pages/UserManagement'
+
+const ClusterControl = lazy(() => import('./pages/ClusterControl'))
+const ClusterManagement = lazy(() => import('./pages/ClusterManagement'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const DeviceControl = lazy(() => import('./pages/DeviceControl'))
+const DeviceManagement = lazy(() => import('./pages/DeviceManagement'))
+const PatrolExecution3D = lazy(() => import('./pages/PatrolExecution3D'))
+const UserManagement = lazy(() => import('./pages/UserManagement'))
 
 function App() {
-  useEffect(() => {
-    const blockedEvents = ['copy', 'cut', 'paste', 'contextmenu', 'selectstart', 'dragstart']
-    const preventDefault = (event) => event.preventDefault()
-    const preventShortcut = (event) => {
-      if (!event.ctrlKey && !event.metaKey) return
-      const key = event.key.toLowerCase()
-      if (['a', 'c', 'v', 'x'].includes(key)) {
-        event.preventDefault()
-      }
-    }
-
-    blockedEvents.forEach((eventName) => {
-      window.addEventListener(eventName, preventDefault, true)
-    })
-    window.addEventListener('keydown', preventShortcut, true)
-
-    return () => {
-      blockedEvents.forEach((eventName) => {
-        window.removeEventListener(eventName, preventDefault, true)
-      })
-      window.removeEventListener('keydown', preventShortcut, true)
-    }
-  }, [])
-
   return (
-    <Routes>
+    <Suspense fallback={<div className="route-loading">正在加载业务模块…</div>}>
+      <Routes>
       {/* 登录页使用独立布局，不显示后台侧边栏。 */}
       <Route path="/login" element={<Login />} />
 
@@ -63,7 +41,8 @@ function App() {
 
       {/* 未匹配路径回到登录页。 */}
       <Route path="*" element={<Navigate to="/login" replace />} />
-    </Routes>
+      </Routes>
+    </Suspense>
   )
 }
 

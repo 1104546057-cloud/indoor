@@ -18,20 +18,19 @@ DB_PORT = int(os.getenv('DB_PORT', '3306'))
 DB_NAME = os.getenv('DB_NAME', 'devices_web_control')
 
 # 密码中可能包含 @ 等特殊字符，所以需要 quote_plus 编码后再拼接连接地址。
-DATABASE_URL = (
+DATABASE_URL = os.getenv('DATABASE_URL') or (
     f'mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}'
     f'@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4'
 )
 
 # 创建 SQLAlchemy 数据库连接引擎和连接池。
-engine = create_engine(
-    DATABASE_URL,
-    echo=False,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
-    pool_recycle=3600,
-)
+engine_options = {'echo': False, 'pool_pre_ping': True}
+if DATABASE_URL.startswith('sqlite'):
+    engine_options['connect_args'] = {'check_same_thread': False}
+else:
+    engine_options.update(pool_size=5, max_overflow=10, pool_recycle=3600)
+
+engine = create_engine(DATABASE_URL, **engine_options)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

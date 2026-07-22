@@ -82,6 +82,15 @@
   gap: 8px;
 }
 
+.device-seed-button {
+  width: calc(100% - 24px);
+  min-height: 36px;
+  margin: 18px 12px 0;
+  color: #dffcff;
+  border: 1px solid rgba(158, 223, 234, .3);
+  background: rgba(8, 59, 85, .62);
+}
+
 .device-category-nav button {
   height: 54px;
   display: grid;
@@ -118,11 +127,20 @@
 }
 
 .device-main {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-rows: 118px minmax(0, 1fr) 190px;
   gap: 14px;
+}
+
+.device-main > .business-notice {
+  position: absolute;
+  z-index: 20;
+  left: 12px;
+  right: 12px;
+  top: 112px;
 }
 
 .device-stat-grid {

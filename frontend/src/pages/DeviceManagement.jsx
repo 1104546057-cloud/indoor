@@ -1,54 +1,21 @@
+/* eslint-disable react/prop-types */
 import { useMemo, useState } from 'react'
+import { fetchJson } from '../api/business'
+import BusinessResourceManager from '../components/BusinessResourceManager'
+import useBusinessOverview from '../hooks/useBusinessOverview'
 import '../styles/DeviceManagement.css'
+import '../styles/BusinessModules.css'
 
 const categories = [
   { id: 'overview', label: '设备总览', icon: 'SYS' },
   { id: 'robot', label: '巡检机器人', icon: 'BOT' },
-  { id: 'asset', label: '电房资产', icon: 'CAB' },
-  { id: 'sensor', label: '传感设备', icon: 'SNS' },
-  { id: 'charge', label: '充电设施', icon: 'CHG' },
-  { id: 'maintenance', label: '维护记录', icon: 'MNT' },
-  { id: 'archive', label: '设备档案', icon: 'ARC' },
+  { id: 'room', label: '电房档案', icon: 'ROM' },
+  { id: 'cabinet', label: '电柜档案', icon: 'CAB' },
+  { id: 'item', label: '监测对象', icon: 'ROI' },
+  { id: 'threshold', label: '阈值规则', icon: 'RUL' },
 ]
 
-const stats = [
-  { label: '设备总数', value: '36', unit: '台', delta: '较昨日 +12%', tone: 'cyan', icon: 'EQ' },
-  { label: '在线设备', value: '28', unit: '台', delta: '较昨日 +8%', tone: 'green', icon: 'ON' },
-  { label: '异常设备', value: '3', unit: '台', delta: '较昨日 -25%', tone: 'red', icon: 'AL' },
-  { label: '待维护设备', value: '2', unit: '台', delta: '较昨日 -33%', tone: 'amber', icon: 'FX' },
-  { label: '巡检点绑定率', value: '92', unit: '%', delta: '较昨日 +5%', tone: 'blue', icon: '92' },
-]
-
-const devices = [
-  { id: 'robot-nano1', name: '巡检车 nano1', type: '巡检机器人', category: 'robot', area: 'A区电房', status: '在线', last: '10:42', battery: 82 },
-  { id: 'robot-nano2', name: '巡检车 nano2', type: '巡检机器人', category: 'robot', area: 'B区电房', status: '在线', last: '11:15', battery: 78 },
-  { id: 'cabinet-1', name: '低压配电柜1号', type: '配电柜', category: 'asset', area: 'A区电房', status: '正常', last: '10:45', battery: null },
-  { id: 'cabinet-2', name: '低压配电柜2号', type: '配电柜', category: 'asset', area: 'A区电房', status: '异常', last: '10:48', battery: null },
-  { id: 'transformer-1', name: '变压器1号', type: '变压器', category: 'asset', area: '变压器室', status: '正常', last: '09:30', battery: null },
-  { id: 'ups-1', name: 'UPS电源柜', type: 'UPS', category: 'asset', area: 'UPS室', status: '正常', last: '09:30', battery: null },
-  { id: 'charger-1', name: '充电桩1号', type: '充电设施', category: 'charge', area: '充电区', status: '在线', last: '11:20', battery: null },
-  { id: 'sensor-1', name: '温湿度传感器1', type: '传感器', category: 'sensor', area: '低压室', status: '异常', last: '11:22', battery: null },
-]
-
-const boundPoints = [
-  { name: 'A1 通道', count: '8个点', icon: 'A1' },
-  { name: 'A2 机房', count: '6个点', icon: 'A2' },
-  { name: 'A3 水泵房', count: '4个点', icon: 'A3' },
-]
-
-const maintenanceRows = [
-  { time: '2026-06-15 10:30', name: '巡检车 nano1', type: '电池检查', content: '电池健康度检测', state: '已完成', operator: '张工' },
-  { time: '2026-06-14 14:20', name: '低压配电柜2号', type: '异常复核', content: '电流偏高复核处理', state: '已完成', operator: '李工' },
-  { time: '2026-06-12 09:15', name: '温湿度传感器1', type: '离线处理', content: '通信模块重启', state: '处理中', operator: '王工' },
-  { time: '2026-06-10 16:40', name: '充电桩1号', type: '设备巡检', content: '充电模块检查', state: '已完成', operator: '刘工' },
-]
-
-const alarmRows = [
-  { time: '11:22:48', name: '温湿度传感器1', type: '通信异常', content: '设备通信中断超过5分钟', state: '未处理' },
-  { time: '10:48:21', name: '低压配电柜2号', type: '电流偏高', content: '电流超过设定阈值 30A', state: '未处理' },
-  { time: '09:35:16', name: '充电桩1号', type: '充电异常', content: '充电连接异常', state: '处理中' },
-  { time: '08:20:05', name: '巡检车 nano2', type: '运行异常', content: '激光雷达遮挡', state: '已处理' },
-]
+const typeLabels = { value: '数值仪表', lamp: '指示灯', handle: '手柄状态' }
 
 function StatusBadge({ value }) {
   return <span className={`dm-status status-${value}`}>{value}</span>
@@ -56,192 +23,118 @@ function StatusBadge({ value }) {
 
 function DeviceManagement() {
   const [activeCategory, setActiveCategory] = useState('overview')
-  const [selectedId, setSelectedId] = useState('robot-nano1')
+  const [selectedId, setSelectedId] = useState('')
+  const [actionNotice, setActionNotice] = useState('')
+  const { business, vehicles, loading, error, reload } = useBusinessOverview({ pollMs: 8000, includeVehicles: true })
 
-  const visibleDevices = useMemo(() => {
-    if (activeCategory === 'overview') return devices
-    if (activeCategory === 'maintenance' || activeCategory === 'archive') return devices
-    return devices.filter((device) => device.category === activeCategory)
-  }, [activeCategory])
+  const rows = useMemo(() => {
+    const vehicleRows = vehicles.map((vehicle) => ({
+      id: `vehicle-${vehicle.id}`,
+      sourceId: vehicle.id,
+      name: vehicle.name || vehicle.id,
+      type: '巡检机器人',
+      category: 'robot',
+      area: vehicle.ssh_host || vehicle.host || '现场网络',
+      status: vehicle.online ? '在线' : '离线',
+      last: vehicle.status || '--',
+      battery: vehicle.battery,
+      voltage: vehicle.voltage,
+      raw: vehicle,
+    }))
+    const cabinetRows = business.cabinets.map((cabinet) => ({
+      id: `cabinet-${cabinet.id}`,
+      sourceId: cabinet.id,
+      name: cabinet.name,
+      type: '电柜',
+      category: 'cabinet',
+      area: business.rooms.find((room) => room.id === cabinet.roomId)?.name || '--',
+      status: cabinet.active ? '正常' : '停用',
+      last: `${business.deviceItems.filter((item) => item.cabinetId === cabinet.id).length} 个对象`,
+      raw: cabinet,
+    }))
+    const itemRows = business.deviceItems.map((item) => ({
+      id: `item-${item.id}`,
+      sourceId: item.id,
+      name: item.name,
+      type: typeLabels[item.itemType] || item.itemType,
+      category: 'item',
+      area: business.cabinets.find((cabinet) => cabinet.id === item.cabinetId)?.name || '--',
+      status: item.threshold ? '已配置' : '待配置',
+      last: item.itemCode,
+      raw: item,
+    }))
+    return [...vehicleRows, ...cabinetRows, ...itemRows]
+  }, [business.cabinets, business.deviceItems, business.rooms, vehicles])
 
-  const selectedDevice = devices.find((device) => device.id === selectedId) || visibleDevices[0] || devices[0]
-  const isRobot = selectedDevice.category === 'robot'
+  const visibleRows = activeCategory === 'robot' ? rows.filter((row) => row.category === 'robot') : rows
+  const selected = rows.find((row) => row.id === selectedId) || visibleRows[0] || rows[0]
+  const openAlarms = business.alarms.filter((alarm) => alarm.status !== '已关闭')
+  const boundCabinets = new Set(business.points.map((point) => point.cabinetId).filter(Boolean)).size
+  const bindingRate = business.cabinets.length ? Math.round((boundCabinets / business.cabinets.length) * 100) : 0
+  const stats = [
+    { label: '资产与对象', value: rows.length, unit: '项', meta: `${business.rooms.length} 个电房`, tone: 'cyan', icon: 'EQ' },
+    { label: '在线机器人', value: vehicles.filter((vehicle) => vehicle.online).length, unit: '台', meta: `共 ${vehicles.length} 台`, tone: 'green', icon: 'ON' },
+    { label: '未闭环告警', value: openAlarms.length, unit: '条', meta: '来自阈值规则', tone: 'red', icon: 'AL' },
+    { label: '正式巡检点', value: business.points.length, unit: '个', meta: `${business.routes.length} 条路线`, tone: 'amber', icon: 'PT' },
+    { label: '电柜绑定率', value: bindingRate, unit: '%', meta: `${boundCabinets}/${business.cabinets.length}`, tone: 'blue', icon: 'BD' },
+  ]
+  const resourceView = ['room', 'cabinet', 'item', 'threshold'].includes(activeCategory)
+
+  const initializeStandardResources = async () => {
+    try {
+      await fetchJson('/api/business/seed', { method: 'POST' })
+      await reload(true)
+      setActionNotice('标准电房、电柜、监测对象、阈值、巡检点和路线已校准')
+    } catch (requestError) {
+      setActionNotice(requestError.message)
+    }
+  }
 
   return (
     <section className="device-console-page">
       <aside className="device-sidebar">
-        <div className="sidebar-title">
-          <strong>设备管理</strong>
-          <span>DEVICE MANAGEMENT</span>
-        </div>
-        <nav className="device-category-nav" aria-label="设备分类">
-          {categories.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={activeCategory === item.id ? 'active' : ''}
-              onClick={() => setActiveCategory(item.id)}
-            >
-              <i>{item.icon}</i>
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </nav>
+        <div className="sidebar-title"><strong>设备管理</strong><span>ASSET & DEVICE MANAGEMENT</span></div>
+        <nav className="device-category-nav" aria-label="设备与基础资源分类">{categories.map((item) => <button key={item.id} type="button" className={activeCategory === item.id ? 'active' : ''} onClick={() => setActiveCategory(item.id)}><i>{item.icon}</i><span>{item.label}</span></button>)}</nav>
+        <button type="button" className="device-seed-button" onClick={initializeStandardResources}>校准标准资源</button>
       </aside>
 
       <main className="device-main">
-        <section className="device-stat-grid">
-          {stats.map((card) => (
-            <article className={`device-stat-card tone-${card.tone}`} key={card.label}>
-              <i>{card.icon}</i>
-              <div>
-                <span>{card.label}</span>
-                <strong>{card.value}<em>{card.unit}</em></strong>
-                <small>{card.delta}</small>
-              </div>
-            </article>
-          ))}
-        </section>
+        <section className="device-stat-grid">{stats.map((card) => <article className={`device-stat-card tone-${card.tone}`} key={card.label}><i>{card.icon}</i><div><span>{card.label}</span><strong>{card.value}<em>{card.unit}</em></strong><small>{card.meta}</small></div></article>)}</section>
 
-        <div className="device-workbench">
-          <section className="dm-panel device-list-panel">
-            <div className="dm-panel-heading">
-              <h2>设备列表</h2>
-              <div className="device-filters">
-                <input placeholder="搜索设备名称" />
-                <select defaultValue="all"><option value="all">设备类型</option></select>
-                <select defaultValue="all"><option value="all">设备状态</option></select>
-                <select defaultValue="all"><option value="all">所属区域</option></select>
-                <button type="button">重置</button>
-              </div>
-            </div>
-
-            <div className="device-table">
-              <div className="device-row device-head">
-                <span>设备名称</span>
-                <span>设备类型</span>
-                <span>所属区域</span>
-                <span>状态</span>
-                <span>最近巡检</span>
-                <span>操作</span>
-              </div>
-              <div className="device-table-body">
-                {visibleDevices.map((device) => (
-                  <button
-                    key={device.id}
-                    type="button"
-                    className={`device-row${selectedDevice.id === device.id ? ' selected' : ''}`}
-                    onClick={() => setSelectedId(device.id)}
-                  >
-                    <strong><i />{device.name}</strong>
-                    <span>{device.type}</span>
-                    <span>{device.area}</span>
-                    <StatusBadge value={device.status} />
-                    <span>{device.last}</span>
-                    <b>查看　编辑　更多</b>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          <section className="dm-panel device-detail-panel">
-            <div className="dm-panel-heading compact"><h2>设备详情</h2></div>
-            <div className="device-detail-hero">
-              <div className={`device-visual ${isRobot ? 'visual-robot' : 'visual-cabinet'}`}>
-                <span className="visual-body" />
-                <span className="visual-shadow" />
-              </div>
-              <div className="device-detail-copy">
-                <div className="detail-title-line">
-                  <strong>{selectedDevice.name}</strong>
-                  <StatusBadge value={selectedDevice.status} />
+        {error ? <div className="business-notice danger">{error}</div> : null}
+        {actionNotice ? <div className="business-notice">{actionNotice}<button type="button" onClick={() => setActionNotice('')}>×</button></div> : null}
+        {loading ? <div className="business-module-loading">正在读取统一业务数据库和车辆注册表…</div> : resourceView ? (
+          <BusinessResourceManager view={activeCategory} business={business} onSaved={() => reload(true)} />
+        ) : (
+          <>
+            <div className="device-workbench">
+              <section className="dm-panel device-list-panel">
+                <div className="dm-panel-heading"><h2>{activeCategory === 'robot' ? '真实车辆注册表' : '设备与业务资产'}</h2><button type="button" onClick={() => reload()}>刷新</button></div>
+                <div className="device-table">
+                  <div className="device-row device-head"><span>名称</span><span>类型</span><span>所属区域 / 地址</span><span>状态</span><span>业务信息</span><span>操作</span></div>
+                  <div className="device-table-body">{visibleRows.length === 0 ? <div className="business-empty">当前分类没有真实数据</div> : visibleRows.map((row) => <button key={row.id} type="button" className={`device-row${selected?.id === row.id ? ' selected' : ''}`} onClick={() => setSelectedId(row.id)}><strong><i />{row.name}</strong><span>{row.type}</span><span>{row.area}</span><StatusBadge value={row.status} /><span>{row.last}</span><b>查看</b></button>)}</div>
                 </div>
-                <dl>
-                  <div><dt>设备类型</dt><dd>{selectedDevice.type}</dd></div>
-                  <div><dt>设备编号</dt><dd>{isRobot ? 'ROBOT-0001' : 'ASSET-0108'}</dd></div>
-                  <div><dt>所属区域</dt><dd>{selectedDevice.area}</dd></div>
-                  <div><dt>IP地址</dt><dd>{isRobot ? '192.168.31.139' : '--'}</dd></div>
-                  <div><dt>固件版本</dt><dd>{isRobot ? 'v2.1.6' : 'v1.0.3'}</dd></div>
-                  <div><dt>运行时长</dt><dd>{isRobot ? '128 h' : '24 h'}</dd></div>
-                </dl>
-              </div>
-              <div className="device-runtime">
-                <dl>
-                  <div><dt>电量</dt><dd>{selectedDevice.battery ? `${selectedDevice.battery}%` : '--'}<i><b style={{ width: `${selectedDevice.battery || 68}%` }} /></i></dd></div>
-                  <div><dt>运行速度</dt><dd>{isRobot ? '0.6 m/s' : '--'}</dd></div>
-                  <div><dt>定位状态</dt><dd>正常</dd></div>
-                  <div><dt>相机状态</dt><dd>{isRobot ? '在线' : '--'}</dd></div>
-                  <div><dt>LiDAR状态</dt><dd>{isRobot ? '在线' : '--'}</dd></div>
-                  <div><dt>通信状态</dt><dd>正常</dd></div>
-                </dl>
-              </div>
+              </section>
+
+              <section className="dm-panel device-detail-panel">
+                <div className="dm-panel-heading compact"><h2>真实档案详情</h2></div>
+                {selected ? <>
+                  <div className="device-detail-hero">
+                    <div className={`device-visual ${selected.category === 'robot' ? 'visual-robot' : 'visual-cabinet'}`}><span className="visual-body" /><span className="visual-shadow" /></div>
+                    <div className="device-detail-copy"><div className="detail-title-line"><strong>{selected.name}</strong><StatusBadge value={selected.status} /></div><dl><div><dt>类型</dt><dd>{selected.type}</dd></div><div><dt>业务编号</dt><dd>{selected.raw.robotCode || selected.raw.cabinetCode || selected.raw.itemCode || selected.sourceId}</dd></div><div><dt>区域 / 地址</dt><dd>{selected.area}</dd></div><div><dt>适配方式</dt><dd>{selected.category === 'robot' ? '真实车辆 agent' : 'MySQL 主数据'}</dd></div></dl></div>
+                    <div className="device-runtime"><dl><div><dt>在线状态</dt><dd>{selected.status}</dd></div><div><dt>电压</dt><dd>{selected.voltage ?? '--'}{selected.voltage != null ? ' V' : ''}</dd></div><div><dt>电量</dt><dd>{selected.battery ?? '--'}{selected.battery != null ? '%' : ''}</dd></div><div><dt>关联巡检点</dt><dd>{selected.category === 'cabinet' ? business.points.filter((point) => point.cabinetId === selected.sourceId).length : '--'}</dd></div></dl></div>
+                  </div>
+                  <div className="bound-points"><h3>关联业务资源</h3><div>{business.points.filter((point) => selected.category !== 'cabinet' || point.cabinetId === selected.sourceId).slice(0, 6).map((point) => <article key={point.id}><i>PT</i><strong>{point.name}</strong><span>{point.pointCode}</span></article>)}{business.points.length === 0 ? <span>尚未配置巡检点</span> : null}</div></div>
+                </> : <div className="business-empty">尚未配置车辆或资产</div>}
+              </section>
             </div>
 
-            <div className="bound-points">
-              <h3>绑定巡检点</h3>
-              <div>
-                {boundPoints.map((point) => (
-                  <article key={point.name}>
-                    <i>{point.icon}</i>
-                    <strong>{point.name}</strong>
-                    <span>{point.count}</span>
-                  </article>
-                ))}
-                <button type="button">+ 绑定巡检点</button>
-              </div>
+            <div className="device-bottom-grid">
+              <section className="dm-panel maintenance-panel"><div className="dm-panel-heading compact"><h2>最近巡检记录</h2></div><div className="mini-table">{business.records.slice(0, 4).map((record) => <div className="mini-row" key={record.id}><span>{record.startedAt || '--'}</span><strong>{record.taskId || record.recordCode}</strong><span>{record.status}</span><span>进度 {record.progress}%</span><StatusBadge value={record.failureReason ? '异常' : '正常'} /><span>{record.pointTotal} 点</span></div>)}{business.records.length === 0 ? <div className="business-empty">尚无实车巡检记录</div> : null}</div></section>
+              <section className="dm-panel alarm-panel"><div className="dm-panel-heading compact"><h2>设备告警</h2></div><div className="mini-table alarm-table">{openAlarms.slice(0, 4).map((alarm) => <div className="mini-row" key={alarm.id}><span>{alarm.createdAt || '--'}</span><strong>{alarm.title}</strong><span>{alarm.severity}</span><span>{alarm.description}</span><StatusBadge value={alarm.status} /></div>)}{openAlarms.length === 0 ? <div className="business-empty">当前没有未闭环告警</div> : null}</div></section>
             </div>
-
-            <div className="recent-result">
-              <div className="accuracy-ring">
-                <strong>98.7%</strong>
-                <span>识别准确率</span>
-              </div>
-              <dl>
-                <div><dt>巡检时间</dt><dd>2026-06-17 10:42</dd></div>
-                <div><dt>巡检点数</dt><dd>8个</dd></div>
-                <div><dt>识别仪表数</dt><dd>24个</dd></div>
-              </dl>
-              <dl>
-                <div><dt>正常</dt><dd className="ok">23个</dd></div>
-                <div><dt>异常</dt><dd className="bad">1个</dd></div>
-                <div><dt>无法识别</dt><dd>0个</dd></div>
-              </dl>
-            </div>
-          </section>
-        </div>
-
-        <div className="device-bottom-grid">
-          <section className="dm-panel maintenance-panel">
-            <div className="dm-panel-heading compact"><h2>维护记录</h2><button type="button">更多</button></div>
-            <div className="mini-table">
-              {maintenanceRows.map((row) => (
-                <div className="mini-row" key={`${row.time}-${row.name}`}>
-                  <span>{row.time}</span>
-                  <strong>{row.name}</strong>
-                  <span>{row.type}</span>
-                  <span>{row.content}</span>
-                  <StatusBadge value={row.state} />
-                  <span>{row.operator}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-          <section className="dm-panel alarm-panel">
-            <div className="dm-panel-heading compact"><h2>设备告警</h2><button type="button">更多</button></div>
-            <div className="mini-table alarm-table">
-              {alarmRows.map((row) => (
-                <div className="mini-row" key={`${row.time}-${row.name}`}>
-                  <span>{row.time}</span>
-                  <strong>{row.name}</strong>
-                  <span>{row.type}</span>
-                  <span>{row.content}</span>
-                  <StatusBadge value={row.state} />
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
+          </>
+        )}
       </main>
     </section>
   )

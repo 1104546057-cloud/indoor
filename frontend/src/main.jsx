@@ -7,7 +7,7 @@ import App from './App.jsx'
 // BrowserRouter 提供前端路由能力，让 App.jsx 可以根据地址显示不同页面。
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <App />
     </BrowserRouter>
   </StrictMode>,

@@ -1,14 +1,18 @@
+/* eslint-disable react/prop-types */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LabBuilding3DPreview from '../components/LabBuilding3DPreview'
+import RouteManagementPanel from '../components/RouteManagementPanel'
 import { hanlinRoomMap, inspectionPointById } from '../data/hanlinRoomMap'
 import { labBuildingMap, labInspectionPointById } from '../data/labBuildingMap'
 import { getInspectionResults, subscribeInspectionResults, updateInspectionResultReview } from '../utils/inspectionResults'
 import { buildNavigationGoals, buildNavigationGoalsFromPoints, isPointInsideSlamCoverage } from '../utils/navigationCoordinates'
 import '../styles/ClusterControl.css'
+import '../styles/BusinessModules.css'
 
 const tabs = [
   { id: 'plan', label: '巡检计划' },
+  { id: 'routes', label: '巡检点与路线' },
   { id: 'records', label: '巡检记录' },
   { id: 'ai', label: 'AI识别记录' },
   { id: 'report', label: '巡检报告' },
@@ -1591,6 +1595,7 @@ function ClusterControl() {
         ))}
       </nav>
 
+      {activeTab === 'routes' ? <RouteManagementPanel /> : <>
       <div className="task-workbench">
         <main className="task-left-zone">
           {activeTab === 'records' && (
@@ -1807,6 +1812,7 @@ function ClusterControl() {
           </div>
         </section>
       </div>
+      </>}
 
       {isPlanModalOpen && (
         <div className="task-modal-backdrop" role="presentation">
