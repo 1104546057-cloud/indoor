@@ -224,6 +224,7 @@ def _alarm_json(alarm: Alarm) -> dict:
     return {
         'id': alarm.id,
         'alarmCode': alarm.alarm_code,
+        'resultId': alarm.result_id,
         'taskId': alarm.task_id,
         'itemId': alarm.item_id,
         'status': alarm.status,
@@ -435,6 +436,9 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'id': result.result_id,
                     'taskId': result.task_id,
                     'recordId': result.inspection_record_id,
+                    'roomCode': result.room_code,
+                    'cabinetCode': result.cabinet_code,
+                    'pointId': result.point_id,
                     'itemCode': result.item_code,
                     'targetName': result.target_name,
                     'recognitionType': result.recognition_type,
@@ -443,6 +447,8 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'confidence': result.confidence,
                     'status': result.status,
                     'imageUrl': result.image_url,
+                    'reviewStatus': result.review_status,
+                    'reviewedAt': result.reviewed_at.isoformat(sep=' ') if result.reviewed_at else None,
                     'capturedAt': result.captured_at.isoformat(sep=' ') if result.captured_at else None,
                 }
                 for result in results

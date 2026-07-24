@@ -16,7 +16,12 @@ function ResourceForm({ view, business, onSaved }) {
     setMessage('')
     try {
       let path = '/api/business/rooms'
-      let payload = { room_code: form.code, name: form.name, location: form.location || null }
+      let payload = {
+        room_code: form.code,
+        name: form.name,
+        location: form.location || null,
+        floor_plan_url: form.floorPlanUrl || null,
+      }
       if (view === 'cabinet') {
         path = '/api/business/cabinets'
         payload = {
@@ -62,7 +67,7 @@ function ResourceForm({ view, business, onSaved }) {
         <label>业务编码<input required value={form.code || ''} onChange={update('code')} /></label>
         <label>名称<input required value={form.name || ''} onChange={update('name')} /></label>
       </div>
-      {view === 'room' ? <label>位置说明<input value={form.location || ''} onChange={update('location')} /></label> : null}
+      {view === 'room' ? <><label>位置说明<input value={form.location || ''} onChange={update('location')} /></label><label>二维平面图地址<input value={form.floorPlanUrl || ''} onChange={update('floorPlanUrl')} placeholder="例如 /maps/first_floor.png" /></label></> : null}
       {view === 'cabinet' ? <>
         <label>所属电房<select required value={form.roomId || ''} onChange={update('roomId')}><option value="">请选择</option>{business.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
         <label>电柜类型<select value={form.typeId || ''} onChange={update('typeId')}><option value="">未指定</option>{business.cabinetTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label>

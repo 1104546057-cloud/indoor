@@ -1,8 +1,9 @@
 /* eslint-disable react/prop-types */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import AlarmWorkflowPanel from '../components/AlarmWorkflowPanel'
 import useBusinessOverview from '../hooks/useBusinessOverview'
+import { hanlinRoomMap } from '../data/hanlinRoomMap'
 import '../styles/Dashboard.css'
 import '../styles/BusinessModules.css'
 
@@ -49,7 +50,53 @@ function ReviewStatusPill({ status }) {
   return <span className={`review-status-pill tone-${tone}`}>{status || '待复核'}</span>
 }
 
-function AiResultDetailModal({ result, onClose, onReview }) {
+function getScenarioMap(room) {
+  return room.roomCode === 'ROOM-A1' ? hanlinRoomMap : null
+}
+
+function ScenarioTaskMap({ map, onSelectPoint }) {
+  const scene = map.sceneMap
+
+  if (!scene) {
+    return (
+      <div className="facility-live-map" aria-label={`${map.name}任务态势图`}>
+        {map.floorPlanUrl ? <img src={map.floorPlanUrl} alt={`${map.name}二维平面图`} /> : <span className="map-empty-floor">请在电房资源中配置对应巡检区域平面图</span>}
+        <span className="map-floor-shade" />
+      </div>
+    )
+  }
+
+  const routePoints = map.points.filter((point) => point.sceneX != null && point.sceneY != null)
+  return (
+    <div className="facility-live-map scenario-map" aria-label={`${scene.name}任务态势图`}>
+      <svg viewBox={`0 0 ${scene.size.width} ${scene.size.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={`${scene.name}二维巡检平面图`}>
+        <rect width={scene.size.width} height={scene.size.height} className="scenario-map-background" />
+        {scene.landmarkLines.map((line) => <rect key={line.id} x={line.x} y={line.y} width={line.width} height={line.height} className="scenario-landmark" />)}
+        {scene.cabinets.map((cabinet) => <rect key={cabinet.id} x={cabinet.x} y={cabinet.y} width={cabinet.width} height={cabinet.depth} className={`scenario-cabinet ${cabinet.type}`} />)}
+        {routePoints.length > 1 ? <polyline points={routePoints.map((point) => `${point.sceneX},${point.sceneY}`).join(' ')} className="scenario-route" /> : null}
+        {routePoints.map((point) => (
+          <g
+            className={`scenario-point${point.isCurrent ? ' is-current' : ''}${point.isCompleted ? ' is-completed' : ''}${point.isAbnormal ? ' is-abnormal' : ''}`}
+            key={point.id}
+            role="button"
+            tabIndex={0}
+            onClick={(event) => { event.stopPropagation(); onSelectPoint(point) }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectPoint(point) }
+            }}
+          >
+            <circle cx={point.sceneX} cy={point.sceneY} r="235" />
+            <text x={point.sceneX} y={point.sceneY + 82}>{point.sequence}</text>
+          </g>
+        ))}
+        {map.currentPoint?.sceneX != null ? <rect x={map.currentPoint.sceneX - 165} y={map.currentPoint.sceneY - 165} width="330" height="330" rx="64" className="scenario-robot" /> : null}
+        {routePoints.filter((point) => point.alarm).map((point) => <g className="scenario-alarm" key={point.alarm.id} onClick={(event) => { event.stopPropagation(); onSelectPoint(point) }}><circle cx={point.sceneX + 265} cy={point.sceneY - 265} r="155" /><text x={point.sceneX + 265} y={point.sceneY - 200}>!</text></g>)}
+      </svg>
+    </div>
+  )
+}
+
+function AiResultDetailModal({ result, onClose, onReview, onOpenAlarm }) {
   if (!result) return null
 
   const pointName = result.targetName || result.pointId || '--'
@@ -80,6 +127,8 @@ function AiResultDetailModal({ result, onClose, onReview }) {
 
           <div className="ai-review-detail-grid">
             <span>巡检任务<b>{result.taskName || result.taskId || '--'}</b></span>
+            <span>巡检记录<b>{result.recordId ? `REC-${result.recordId}` : '--'}</b></span>
+            <span>识别结果<b>{result.resultId || result.id || '--'}</b></span>
             <span>执行设备<b>{result.robot || result.robotId || 'nano1'}</b></span>
             <span>识别点位<b>{pointName}</b></span>
             <span>识别类型<b>{result.recognitionType || '--'}</b></span>
@@ -91,6 +140,7 @@ function AiResultDetailModal({ result, onClose, onReview }) {
 
           <div className="ai-review-modal-actions">
             {result.reviewedAt && <small>复核时间：{result.reviewedAt}</small>}
+            {result.alarm ? <button type="button" className="alarm-link" onClick={() => onOpenAlarm(result.alarm)}>处理告警 {result.alarm.alarmCode}</button> : null}
             <button type="button" onClick={() => onReview(result.id, '标记误报')}>标记误报</button>
             <button type="button" className="danger" onClick={() => onReview(result.id, '确认异常')}>确认异常</button>
           </div>
@@ -102,6 +152,7 @@ function AiResultDetailModal({ result, onClose, onReview }) {
 
 function Dashboard() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { business } = useBusinessOverview({ pollMs: 8000 })
   const [vehicles, setVehicles] = useState([])
   const [statusText, setStatusText] = useState('等待车辆注册表同步')
@@ -112,6 +163,11 @@ function Dashboard() {
   const [captureMessage, setCaptureMessage] = useState('')
   const [activeMapId, setActiveMapId] = useState(null)
   const [processTab, setProcessTab] = useState('points')
+
+  useEffect(() => {
+    const focusRoomId = location.state?.focusRoomId
+    if (focusRoomId) setActiveMapId(focusRoomId)
+  }, [location.state?.focusRoomId])
 
   useEffect(() => {
     let ignore = false
@@ -205,10 +261,37 @@ function Dashboard() {
     }
   }
 
+  const operationalVehicles = useMemo(() => {
+    const robotsByCode = new Map(business.robots.map((robot) => [robot.robotCode, robot]))
+    const registeredVehicles = vehicles.map((vehicle) => {
+      const robot = robotsByCode.get(vehicle.id)
+      robotsByCode.delete(vehicle.id)
+      return {
+        ...robot,
+        ...vehicle,
+        // 在线状态只以车辆 Agent 的实时探测结果为准；电量和任务状态复用业务库回传数据。
+        online: vehicle.online,
+        taskStatus: robot?.status,
+        battery: robot?.battery ?? vehicle.battery,
+        position: robot?.position,
+      }
+    })
+
+    return [
+      ...registeredVehicles,
+      ...Array.from(robotsByCode.values()).map((robot) => ({
+        ...robot,
+        id: robot.robotCode,
+        taskStatus: robot.status,
+        online: Boolean(robot.online),
+      })),
+    ]
+  }, [business.robots, vehicles])
+
   const summary = useMemo(() => {
-    const total = vehicles.length
-    const online = vehicles.filter((vehicle) => vehicle.online).length
-    const activeVehicle = vehicles.find((vehicle) => vehicle.online) || vehicles[0] || null
+    const total = operationalVehicles.length
+    const online = operationalVehicles.filter((vehicle) => vehicle.online).length
+    const activeVehicle = operationalVehicles.find((vehicle) => vehicle.online) || operationalVehicles[0] || null
 
     return {
       total,
@@ -217,17 +300,9 @@ function Dashboard() {
       onlineRate: total ? Math.round((online / total) * 100) : 0,
       activeVehicle,
     }
-  }, [vehicles])
+  }, [operationalVehicles])
 
   const recognitionSource = backendResults
-
-  const anomalyResults = useMemo(() => (
-    recognitionSource.filter((result) => result.status === '异常' || result.status === '告警')
-  ), [recognitionSource])
-
-  const pendingReviewCount = useMemo(() => (
-    anomalyResults.filter((result) => result.reviewStatus === '待复核').length
-  ), [anomalyResults])
 
   const dashboardKpis = useMemo(() => {
     const normalCount = recognitionSource.filter((result) => result.status === '正常').length
@@ -256,6 +331,7 @@ function Dashboard() {
       if (card.key === 'alarms') {
         return {
           ...card,
+          tone: openAlarmCount ? 'red' : 'green',
           value: String(openAlarmCount),
           delta: openAlarmCount ? '等待告警闭环' : '暂无未关闭告警',
         }
@@ -285,26 +361,59 @@ function Dashboard() {
     progress: activeRecord.progress,
   } : { name: '暂无执行任务', code: '--', route: '--', startTime: '--', duration: '--', progress: 0 }
 
-  const dashboardMaps = useMemo(() => business.rooms.map((room, index) => {
-    const route = business.routes.find((item) => item.roomId === room.id)
+  const dashboardMaps = useMemo(() => business.rooms.map((room) => {
+    const sceneMap = getScenarioMap(room)
+    const roomCabinets = business.cabinets.filter((cabinet) => cabinet.roomId === room.id)
+    const roomPoints = business.points.filter((point) => point.roomId === room.id)
+    const route = business.routes.find((item) => item.name === activeRecord?.routeName)
+      || business.routes.find((item) => item.roomId === room.id)
     const record = business.records.find((item) => item.routeName === route?.name)
     const robotName = record?.robotName || summary.activeVehicle?.name || summary.activeVehicle?.id || '未绑定实车'
     const isRunning = record && ['dispatching', 'running'].includes(record.status)
+    const routePoints = route?.points?.length ? route.points : roomPoints
+    const pointMarkers = routePoints.map((point, index) => {
+      const cabinet = roomCabinets.find((item) => item.id === point.cabinetId)
+      const scenePoint = sceneMap?.inspectionPoints[index]
+      const x = cabinet?.locationX ?? Math.min(88, Math.max(12, Number(point.x) * 10 || 18 + index * 18))
+      const y = cabinet?.locationY ?? Math.min(82, Math.max(14, Number(point.y) * 10 || 25 + index * 15))
+      const result = recognitionSource.find((item) => item.pointId === point.pointCode || item.cabinetCode === cabinet?.cabinetCode)
+      const alarm = result ? business.alarms.find((item) => Number(item.resultId) === Number(result.resultId || result.id)) : null
+      const isAbnormal = result && ['异常', '告警'].includes(result.status)
+      return {
+        ...point,
+        x,
+        y,
+        sceneX: scenePoint?.x,
+        sceneY: scenePoint?.y,
+        sequence: point.sequence || index + 1,
+        result,
+        alarm,
+        isAbnormal,
+        isCurrent: isRunning && record.currentSequence === (point.sequence || index + 1),
+        isCompleted: record?.currentSequence > (point.sequence || index + 1),
+      }
+    })
+    const anomalies = pointMarkers.filter((point) => point.alarm && point.alarm.status !== '已关闭')
+    const currentPoint = isRunning ? (pointMarkers.find((point) => point.isCurrent) || pointMarkers[0]) : null
     return {
       id: room.id,
       name: room.name,
+      roomCode: room.roomCode,
+      floorPlanUrl: room.floorPlanUrl,
+      sceneMap,
       task: record?.taskName || route?.name || '尚未配置巡检路线',
+      taskId: record?.taskId || null,
       robot: robotName,
       status: isRunning ? '执行中' : route ? '待下发' : '未配置',
       statusTone: isRunning ? 'running' : route ? 'idle' : 'queued',
       progress: record?.progress || 0,
-      pointCount: route?.points?.length || 0,
-      currentPoint: recognitionSource[0]?.pointId || '--',
-      variant: ['hanlin', 'compact', 'wide'][index % 3],
-      anomalies: business.alarms.filter((alarm) => alarm.status !== '已关闭').length,
-      pendingReview: pendingReviewCount,
+      pointCount: pointMarkers.length,
+      cabinets: roomCabinets,
+      points: pointMarkers,
+      currentPoint,
+      anomalies,
     }
-  }), [business.alarms, business.records, business.rooms, business.routes, pendingReviewCount, recognitionSource, summary.activeVehicle])
+  }), [activeRecord?.routeName, business.alarms, business.cabinets, business.points, business.records, business.rooms, business.routes, recognitionSource, summary.activeVehicle])
 
   const resolvedActiveMapId = activeMapId && dashboardMaps.some((map) => map.id === activeMapId)
     ? activeMapId
@@ -369,6 +478,13 @@ function Dashboard() {
     setSelectedResult(null)
   }
 
+  const handleOpenAlarm = (alarm) => {
+    setSelectedResult(null)
+    window.requestAnimationFrame(() => {
+      document.getElementById(`alarm-${alarm.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }
+
   return (
     <section className="dashboard-page">
       <div className="dashboard-overview">
@@ -397,7 +513,7 @@ function Dashboard() {
               <div><dt>任务编号</dt><dd>{currentMission.code}</dd></div>
               <div><dt>巡检路线</dt><dd>{currentMission.route}</dd></div>
               <div><dt>开始时间</dt><dd>{currentMission.startTime}</dd></div>
-              <div><dt>预计时长</dt><dd>{currentMission.duration}</dd></div>
+              <div><dt>任务状态</dt><dd>{currentMission.duration}</dd></div>
             </dl>
             <div className="mission-progress-block">
               <div className="mission-progress-label">
@@ -417,7 +533,9 @@ function Dashboard() {
               <h2>多地图态势</h2>
               <span>{dashboardMaps.length} 张地图 / {summary.total} 台车辆</span>
             </div>
-            <button type="button" className="dashboard-link-button" onClick={() => navigate('/device-control')}>
+            <button type="button" className="dashboard-link-button" onClick={() => navigate('/device-control', {
+              state: { returnTo: '/dashboard', focusRoomId: resolvedActiveMapId, taskId: activeRecord?.taskId },
+            })}>
               进入遥控台
             </button>
           </div>
@@ -448,31 +566,19 @@ function Dashboard() {
                     <em>{map.status}</em>
                   </div>
 
-                  <div className={`facility-mini-map variant-${map.variant}`}>
-                    <span className="mini-grid" />
-                    <span className="mini-zone zone-main" />
-                    <span className="mini-zone zone-side" />
-                    <span className="mini-rack rack-a" />
-                    <span className="mini-rack rack-b" />
-                    <span className="mini-rack rack-c" />
-                    <span className="mini-route route-a" />
-                    <span className="mini-route route-b" />
-                    <span className="mini-point point-a" />
-                    <span className="mini-point point-b" />
-                    <span className="mini-point point-c" />
-                    <span className="mini-robot" />
-                    {map.anomalies > 0 && (
-                      <span className="mini-anomaly">
-                        {map.currentPoint}
-                      </span>
-                    )}
-                  </div>
+                  <ScenarioTaskMap
+                    map={map}
+                    onSelectPoint={(point) => {
+                      setActiveMapId(map.id)
+                      if (point.result) setSelectedResult({ ...point.result, alarm: point.alarm, taskName: map.task })
+                    }}
+                  />
 
                   <div className="facility-card-foot">
                     <span><b>{map.robot}</b> 执行车</span>
                     <span>{map.pointCount} 点位</span>
-                    <span className={map.anomalies > 0 ? 'map-alert-count is-active' : 'map-alert-count'}>
-                      异常 {map.anomalies}
+                    <span className={map.anomalies.length > 0 ? 'map-alert-count is-active' : 'map-alert-count'}>
+                      告警 {map.anomalies.length}
                     </span>
                   </div>
                   <div className="facility-progress">
@@ -575,7 +681,7 @@ function Dashboard() {
             </div>
             <dl className="robot-stats">
               <div><dt>机器人编号</dt><dd>{summary.activeVehicle?.id?.toUpperCase() || '--'}</dd></div>
-              <div><dt>运行状态</dt><dd className="status-online">{summary.activeVehicle?.online ? '巡检中' : '待命'}</dd></div>
+              <div><dt>运行状态</dt><dd className={summary.activeVehicle?.online ? 'status-online' : ''}>{summary.activeVehicle?.taskStatus || summary.activeVehicle?.status || (summary.activeVehicle?.online ? '在线待命' : '离线')}</dd></div>
               <div><dt>实时电量</dt><dd>{summary.activeVehicle?.battery != null ? `${summary.activeVehicle.battery}%` : '--'}</dd></div>
               <div><dt>运行速度</dt><dd>{summary.activeVehicle?.speed != null ? `${summary.activeVehicle.speed} m/s` : '--'}</dd></div>
               <div><dt>主电池</dt><dd>{formatVoltage(summary.activeVehicle?.voltage)}</dd></div>
@@ -638,6 +744,7 @@ function Dashboard() {
         result={selectedResult}
         onClose={() => setSelectedResult(null)}
         onReview={handleReviewResult}
+        onOpenAlarm={handleOpenAlarm}
       />
     </section>
   )

@@ -120,6 +120,10 @@ def test_real_vehicle_business_loop(monkeypatch):
     assert len([item for item in overview['results'] if item['taskId'] == task_id]) == 2
     alarms = [item for item in overview['alarms'] if item['taskId'] == task_id]
     assert len(alarms) == 1
+    result = next(item for item in overview['results'] if item['taskId'] == task_id)
+    assert result['roomCode'] == 'ROOM-A1'
+    assert result['pointId'] == 'POINT-A01'
+    assert alarms[0]['resultId'] is not None
     assert [process['action'] for process in alarms[0]['processes']] == ['自动生成', '重复上报']
 
     alarm_id = alarms[0]['id']

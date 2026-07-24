@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import '../styles/DeviceControl.css'
 
 const directionButtons = [
@@ -71,6 +72,8 @@ function normalizeLidarFrame(frame) {
 }
 
 function DeviceControl() {
+  const navigate = useNavigate()
+  const location = useLocation()
   const [cameraStreamUrl, setCameraStreamUrl] = useState('')
   const [lidarWsUrl, setLidarWsUrl] = useState('')
   const [lidarStatus, setLidarStatus] = useState('未连接')
@@ -649,6 +652,21 @@ function DeviceControl() {
         <div className="frame-corner top-right" />
         <div className="frame-corner bottom-left" />
         <div className="frame-corner bottom-right" />
+
+        <button
+          type="button"
+          className="cockpit-exit-button"
+          aria-label="退出遥控台，返回室内巡检监控"
+          title="退出遥控台"
+          onClick={() => {
+            stopMotion()
+            navigate(location.state?.returnTo || '/dashboard', {
+              state: { focusRoomId: location.state?.focusRoomId, taskId: location.state?.taskId },
+            })
+          }}
+        >
+          ×
+        </button>
 
         <div className="vehicle-menu-anchor" ref={vehicleMenuRef}>
           <button
