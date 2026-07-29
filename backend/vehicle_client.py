@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import paramiko
@@ -127,7 +128,9 @@ def _agent_json_request(vehicle, path: str, method: str = 'GET', payload: dict |
     except HTTPError as error:
         detail = error.read().decode('utf-8', errors='replace')
         raise HTTPException(
-            status_code=502,
+            # 车端明确返回的 4xx（例如 execution_id 不存在）应原样转发，
+            # 这样监控页可以区分“旧任务”与“车辆网关故障”。
+            status_code=error.code if 400 <= error.code < 500 else 502,
             detail=f'车辆 agent 返回错误：HTTP {error.code} {detail}',
         ) from error
     except URLError as error:
@@ -167,30 +170,36 @@ def send_navigation_route(vehicle_id, route):
 
     vehicle = _resolve_vehicle(vehicle_id)
     path = vehicle.get('navigation_route_path', '/navigation_route')
-    try:
-        return _agent_json_request(vehicle, path, method='POST', payload=route)
-    except HTTPException as error:
-        if error.status_code not in {404, 405, 501, 502}:
-            raise
+    # 不降级为连续发送多个单点目标。只有车端路线执行器才能在前一点
+    # SUCCEEDED 后再发送下一点，并提供可信的逐点到达确认。
+    return _agent_json_request(vehicle, path, method='POST', payload=route)
 
-        goal_path = vehicle.get('navigation_goal_path', '/navigation_goal')
-        goal_results = []
-        for index, goal in enumerate(route.get('goals', []), start=1):
-            goal_payload = {
-                **goal,
-                'route_index': index,
-                'route_total': len(route.get('goals', [])),
-            }
-            goal_results.append(_agent_json_request(vehicle, goal_path, method='POST', payload=goal_payload))
 
-        return {
-            'message': 'route endpoint unavailable; sent goals one by one',
-            'fallback': 'navigation_goal',
-            'vehicle_id': vehicle['id'],
-            'task_id': route.get('task_id'),
-            'goal_count': len(goal_results),
-            'results': goal_results,
-        }
+def get_navigation_route_status(vehicle_id, execution_id=None):
+    """Read the authoritative ordered-route state from the selected vehicle."""
+
+    vehicle = _resolve_vehicle(vehicle_id)
+    path = vehicle.get('navigation_route_status_path', '/navigation_route/status')
+    if execution_id:
+        path = f"{path}?{urlencode({'execution_id': execution_id})}"
+    status = _agent_json_request(vehicle, path)
+    return {
+        'vehicle_id': vehicle['id'],
+        'navigation': status,
+    }
+
+
+def cancel_navigation_route(vehicle_id, execution_id=None):
+    """Cancel the active move_base route on the selected vehicle."""
+
+    vehicle = _resolve_vehicle(vehicle_id)
+    path = vehicle.get('navigation_route_cancel_path', '/navigation_route/cancel')
+    payload = {'execution_id': execution_id} if execution_id else {}
+    status = _agent_json_request(vehicle, path, method='POST', payload=payload)
+    return {
+        'vehicle_id': vehicle['id'],
+        'navigation': status,
+    }
 
 
 def stop_vehicle(vehicle_id):
@@ -207,25 +216,35 @@ def get_vehicle_status(vehicle_id):
     return _agent_json_request(vehicle, '/status')
 
 
-def get_camera_info(vehicle_id):
+def _camera_stream_url(vehicle, camera_role=None):
+    if camera_role == 'movement':
+        return vehicle.get('movement_camera_stream_url') or vehicle['camera_stream_url']
+    return vehicle['camera_stream_url']
+
+
+def get_camera_info(vehicle_id, camera_role=None):
     """返回前端用的指定车辆摄像头流地址。"""
 
     vehicle = _resolve_vehicle(vehicle_id)
-    stream_path = f"/api/vehicle/camera/stream?vehicle_id={vehicle['id']}"
+    query = {'vehicle_id': vehicle['id']}
+    if camera_role:
+        query['camera_role'] = camera_role
+    stream_path = f"/api/vehicle/camera/stream?{urlencode(query)}"
     return {
         'vehicle_id': vehicle['id'],
+        'camera_role': camera_role or 'inspection',
         'stream_url': stream_path,
-        'source_stream_url': vehicle['camera_stream_url'],
+        'source_stream_url': _camera_stream_url(vehicle, camera_role),
         'cache': 'no-store',
     }
 
 
-def open_camera_stream(vehicle_id):
+def open_camera_stream(vehicle_id, camera_role=None):
     """打开指定车辆摄像头 MJPEG 流，供 FastAPI 以同源代理方式转发。"""
 
     vehicle = _resolve_vehicle(vehicle_id)
     request = Request(
-        vehicle['camera_stream_url'],
+        _camera_stream_url(vehicle, camera_role),
         headers={
             'Accept': 'multipart/x-mixed-replace,image/*,*/*',
             'Cache-Control': 'no-cache',

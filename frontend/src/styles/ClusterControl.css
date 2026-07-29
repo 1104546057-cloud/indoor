@@ -1946,6 +1946,24 @@
   fill: #35f0bd;
 }
 
+.map-point-heading {
+  pointer-events: none;
+}
+
+.map-point-heading line {
+  stroke: #ffcf66;
+  stroke-width: 1.8;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 2px rgba(255, 207, 102, 0.9));
+}
+
+.map-point-heading polygon {
+  fill: #ffcf66;
+  stroke: #062130;
+  stroke-width: 0.45;
+  vector-effect: non-scaling-stroke;
+}
+
 .map-point-hit.selectable {
   cursor: pointer;
 }
@@ -2132,7 +2150,7 @@
 
 .route-order-list article {
   display: grid;
-  grid-template-columns: 36px minmax(76px, 0.68fr) minmax(110px, 1fr) auto;
+  grid-template-columns: 36px minmax(76px, 0.68fr) minmax(100px, 0.9fr) minmax(122px, 0.72fr) auto;
   align-items: center;
   gap: 10px;
   min-height: 48px;
@@ -2160,7 +2178,36 @@
   white-space: nowrap;
 }
 
-.route-order-list article div {
+.route-direction-control {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.route-direction-control > span {
+  color: #7faeba;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.route-direction-control select {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid rgba(53, 240, 189, 0.34);
+  color: #eafffa;
+  background: #092c3d;
+  font-size: 11px;
+  font-weight: 800;
+  outline: none;
+}
+
+.route-direction-control select:focus {
+  border-color: #35f0bd;
+  box-shadow: 0 0 0 2px rgba(53, 240, 189, 0.12);
+}
+
+.route-order-list .route-order-actions {
   display: flex;
   justify-content: flex-end;
   gap: 5px;

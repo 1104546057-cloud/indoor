@@ -7,6 +7,12 @@ import { hanlinRoomMap, inspectionPointById } from '../data/hanlinRoomMap'
 import { labBuildingMap, labInspectionPointById } from '../data/labBuildingMap'
 import { getInspectionResults, subscribeInspectionResults, updateInspectionResultReview } from '../utils/inspectionResults'
 import { buildNavigationGoals, buildNavigationGoalsFromPoints, isPointInsideSlamCoverage } from '../utils/navigationCoordinates'
+import {
+  buildPatrolMonitorUrl,
+  getNavigationExecutionId,
+  loadPatrolMonitorContext,
+  savePatrolMonitorContext,
+} from '../utils/patrolMonitor'
 import '../styles/ClusterControl.css'
 import '../styles/BusinessModules.css'
 
@@ -29,6 +35,19 @@ const allInspectionPointById = {
 }
 
 const NAVIGATION_SPEED = 0.35
+const ARRIVAL_DIRECTIONS = [
+  { value: 'east', label: '东（0°）' },
+  { value: 'north', label: '北（90°）' },
+  { value: 'west', label: '西（180°）' },
+  { value: 'south', label: '南（-90°）' },
+]
+const ARRIVAL_DIRECTION_VALUES = new Set(ARRIVAL_DIRECTIONS.map((item) => item.value))
+const DIRECTION_VECTORS = {
+  east: { x: 1, y: 0 },
+  north: { x: 0, y: -1 },
+  west: { x: -1, y: 0 },
+  south: { x: 0, y: 1 },
+}
 
 function getSceneMap(sceneId = 'power-room') {
   return sceneMaps[sceneId] || hanlinRoomMap
@@ -193,6 +212,54 @@ function getEstimatedMinutes(pointCount) {
   return Math.max(12, 8 + pointCount * 2)
 }
 
+function normalizeArrivalDirection(direction) {
+  if (ARRIVAL_DIRECTION_VALUES.has(direction)) {
+    return direction
+  }
+
+  if (typeof direction === 'number' && Number.isFinite(direction)) {
+    const normalizedYaw = Math.atan2(Math.sin(direction), Math.cos(direction))
+    return ARRIVAL_DIRECTIONS.reduce((closest, item) => {
+      const itemYaw = {
+        east: 0,
+        north: Math.PI / 2,
+        west: Math.PI,
+        south: -Math.PI / 2,
+      }[item.value]
+      const distance = Math.abs(Math.atan2(
+        Math.sin(normalizedYaw - itemYaw),
+        Math.cos(normalizedYaw - itemYaw),
+      ))
+      return distance < closest.distance ? { value: item.value, distance } : closest
+    }, { value: 'east', distance: Number.POSITIVE_INFINITY }).value
+  }
+
+  return 'east'
+}
+
+function getPlanPointDirection(point, pointDirections = {}) {
+  return normalizeArrivalDirection(pointDirections[point?.id] ?? point?.direction ?? point?.yaw)
+}
+
+function getPlanRoutePoints(form) {
+  if (form.sceneId === 'lab-building') {
+    return (form.routePoints || []).map((point) => {
+      const direction = getPlanPointDirection(point, form.pointDirections)
+      return { ...point, direction, yaw: direction }
+    })
+  }
+
+  const selectedPointIds = form.selectedPointIds || []
+
+  return selectedPointIds
+    .map((pointId) => allInspectionPointById[pointId])
+    .filter(Boolean)
+    .map((point) => {
+      const direction = getPlanPointDirection(point, form.pointDirections)
+      return { ...point, direction, yaw: direction }
+    })
+}
+
 const defaultPlanForm = {
   name: '实验楼一层环廊巡检任务',
   sceneId: 'lab-building',
@@ -204,6 +271,7 @@ const defaultPlanForm = {
   startTime: '09:30',
   selectedPointIds: [],
   routePoints: [],
+  pointDirections: {},
   priority: wholeRoomScope.priority,
 }
 
@@ -216,12 +284,9 @@ function getWaitingAiPreview() {
 }
 
 function createTaskFromForm(form) {
-  const isFreeRoute = form.sceneId === 'lab-building'
-  const routePoints = isFreeRoute ? (form.routePoints || []) : []
-  const selectedPointIds = isFreeRoute
-    ? routePoints.map((point) => point.id)
-    : (form.selectedPointIds.length > 0 ? form.selectedPointIds : getNavigablePointIds(form.sceneId))
-  const pointTotal = isFreeRoute ? routePoints.length : selectedPointIds.length
+  const routePoints = getPlanRoutePoints(form)
+  const selectedPointIds = routePoints.map((point) => point.id)
+  const pointTotal = routePoints.length
   const duration = getEstimatedMinutes(pointTotal)
   const start = `${form.startDate} ${form.startTime}`
   const [hour, minute] = form.startTime.split(':').map(Number)
@@ -246,7 +311,7 @@ function createTaskFromForm(form) {
     timeline: [
       { time: form.startTime, label: '等待任务启动', type: 'WAIT', state: 'pending' },
       { time: '--:--', label: '机器人启动', type: 'GO', state: 'pending' },
-      { time: '--:--', label: `到达${(isFreeRoute ? routePoints[0]?.targetName : allInspectionPointById[selectedPointIds[0]]?.targetName) || '首个巡检点'}`, type: 'POS', state: 'pending' },
+      { time: '--:--', label: `到达${routePoints[0]?.targetName || '首个巡检点'}`, type: 'POS', state: 'pending' },
       { time: '--:--', label: '完成 AI 识别', type: 'AI', state: 'pending' },
       { time: '--:--', label: '上传识别结果', type: 'UP', state: 'pending' },
       { time: '--:--', label: '巡检完成', type: 'END', state: 'pending' },
@@ -303,6 +368,8 @@ function getAreaForm(area = wholeRoomScope) {
     startDate: defaultPlanForm.startDate,
     startTime: defaultPlanForm.startTime,
     selectedPointIds,
+    routePoints: [],
+    pointDirections: {},
     priority: area.priority,
   }
 }
@@ -853,6 +920,7 @@ function PlanRoutePreview({
   const pathPoints = selectedRoutePoints
     .map((point) => `${point.x},${point.y}`)
     .join(' ')
+  const headingLength = Math.max(mapData.size.width, mapData.size.height) * 0.025
 
   const handleMapClick = (event) => {
     if (!isSlamRouteMap || !selectable || !onAddFreePoint) return
@@ -1015,6 +1083,27 @@ function PlanRoutePreview({
           <text x={point.x + 260} y={point.y - 210}>{index + 1}</text>
         </g>
       ))}
+      {selectedRoutePoints.map((point) => {
+        const vector = DIRECTION_VECTORS[getPlanPointDirection(point)]
+        const tipX = point.x + vector.x * headingLength
+        const tipY = point.y + vector.y * headingLength
+        const baseX = point.x + vector.x * headingLength * 0.66
+        const baseY = point.y + vector.y * headingLength * 0.66
+        const perpendicularX = -vector.y
+        const perpendicularY = vector.x
+        const wingSize = headingLength * 0.18
+
+        return (
+          <g key={`heading-${point.id}`} className="map-point-heading" aria-label={`到点朝向${getPlanPointDirection(point)}`}>
+            <line x1={point.x} y1={point.y} x2={tipX} y2={tipY} />
+            <polygon points={[
+              `${tipX},${tipY}`,
+              `${baseX + perpendicularX * wingSize},${baseY + perpendicularY * wingSize}`,
+              `${baseX - perpendicularX * wingSize},${baseY - perpendicularY * wingSize}`,
+            ].join(' ')} />
+          </g>
+        )
+      })}
     </svg>
   )
 
@@ -1022,7 +1111,7 @@ function PlanRoutePreview({
     <div className="route-preview">
       <div className="route-preview-head">
         <strong>{mapData.name}</strong>
-        <span>{selectedRoutePoints.length} 个巡检点 / 黄色为地标线</span>
+        <span>{selectedRoutePoints.length} 个巡检点 / 黄线为地标，黄箭头为到点朝向</span>
       </div>
       <div className="route-map-canvas">{mapSvg}</div>
       {isSlamRouteMap && (
@@ -1149,7 +1238,7 @@ function ClusterControl() {
       progressLabel: '任务进度',
       timelineTitle: '巡检执行时间项',
       aiTitle: 'AI识别结果预览',
-      primaryAction: '查看详情',
+      primaryAction: '实时监控',
       moreAction: '查看更多',
       actionTitle: '快捷模板',
     }
@@ -1247,6 +1336,7 @@ function ClusterControl() {
       name: isLabScene ? `${mapData.name}环廊巡检任务` : `${mapData.name}整房巡检任务`,
       selectedPointIds: getNavigablePointIds(sceneId),
       routePoints: [],
+      pointDirections: {},
     }))
   }
 
@@ -1286,6 +1376,7 @@ function ClusterControl() {
         targetName: `自由点${nextIndex}`,
         x: Math.round(coords.x),
         y: Math.round(coords.y),
+        direction: 'east',
         yaw: 'east',
         recognitionTargets: ['导航点'],
         temporary: true,
@@ -1302,6 +1393,22 @@ function ClusterControl() {
     setPlanForm((currentForm) => ({
       ...currentForm,
       routePoints: (currentForm.routePoints || []).filter((point) => point.id !== pointId),
+    }))
+  }
+
+  const updatePlanPointDirection = (pointId, direction) => {
+    const normalizedDirection = normalizeArrivalDirection(direction)
+    setPlanForm((currentForm) => ({
+      ...currentForm,
+      pointDirections: {
+        ...(currentForm.pointDirections || {}),
+        [pointId]: normalizedDirection,
+      },
+      routePoints: (currentForm.routePoints || []).map((point) => (
+        point.id === pointId
+          ? { ...point, direction: normalizedDirection, yaw: normalizedDirection }
+          : point
+      )),
     }))
   }
 
@@ -1397,12 +1504,23 @@ function ClusterControl() {
 
     if (action === 'start' || action === 'resume') {
       try {
-        const { goals } = await sendTaskNavigationRoute(task)
+        const { goals, data } = await sendTaskNavigationRoute(task)
         const firstGoal = goals[0]
+        const executionId = getNavigationExecutionId(data)
+        savePatrolMonitorContext({
+          executionId,
+          taskId: task.id,
+          taskName: task.name,
+          sceneId: task.sceneId,
+          robot: task.robot,
+          pointIds: task.pointIds,
+          routePoints: task.routePoints,
+          navigationGoals: goals,
+        })
         updateTask(
           task.id,
           getStartedTask,
-          `${task.name} sent to ${task.robot}: ${goals.length} goals, first ${firstGoal.point_id} -> map(${firstGoal.x}, ${firstGoal.y}, yaw ${firstGoal.yaw})`,
+          `${task.name} sent to ${task.robot}: ${goals.length} goals, execution ${executionId || 'unknown'}, first ${firstGoal.point_id} -> map(${firstGoal.x}, ${firstGoal.y}, yaw ${firstGoal.yaw})`,
         )
         setActiveTab('plan')
       } catch (error) {
@@ -1468,7 +1586,7 @@ function ClusterControl() {
 
   const openPatrolReplay = (task) => {
     setSelectedTaskId(task.id)
-    navigate('/patrol-3d', {
+    navigate(buildPatrolMonitorUrl({ taskId: task.id, vehicleId: task.robot, replayMode: true }), {
       state: {
         taskId: task.id,
         taskName: task.name,
@@ -1479,6 +1597,25 @@ function ClusterControl() {
         replayMode: true,
       },
     })
+  }
+
+  const openLivePatrolMonitor = (task) => {
+    const monitor = loadPatrolMonitorContext({ taskId: task.id })
+    const state = {
+      taskId: task.id,
+      taskName: task.name,
+      sceneId: task.sceneId,
+      robot: task.robot,
+      pointIds: task.pointIds,
+      routePoints: task.routePoints,
+      ...monitor,
+      replayMode: false,
+    }
+    navigate(buildPatrolMonitorUrl({
+      executionId: state.executionId,
+      vehicleId: state.robot,
+      taskId: state.taskId,
+    }), { state })
   }
 
   const showArchiveAiRecords = (task) => {
@@ -1530,16 +1667,7 @@ function ClusterControl() {
       return
     }
 
-    navigate('/patrol-3d', {
-      state: {
-        taskId: contextTask.id,
-        taskName: contextTask.name,
-        sceneId: contextTask.sceneId,
-        robot: contextTask.robot,
-        pointIds: contextTask.pointIds,
-        routePoints: contextTask.routePoints,
-      },
-    })
+    openLivePatrolMonitor(contextTask)
   }
 
   const handleContextMoreAction = () => {
@@ -1674,6 +1802,7 @@ function ClusterControl() {
                         )}
                         {task.status === '执行中' && (
                           <>
+                            <button type="button" className="action-start" onClick={(event) => { event.stopPropagation(); openLivePatrolMonitor(task) }}>监控</button>
                             <button type="button" className="action-remote" onClick={(event) => handleTaskAction(event, task, 'remote')}>遥控</button>
                             <button type="button" onClick={(event) => handleTaskAction(event, task, 'pause')}>暂停</button>
                           </>
@@ -1757,7 +1886,12 @@ function ClusterControl() {
                 <article className="template-item">
                   <span>3D</span>
                   <div><strong>{activeTab === 'records' ? '过程回放' : '关联过程'}</strong><small>{contextTask.name}</small></div>
-                  <button type="button" onClick={() => openPatrolReplay(contextTask)}>进入</button>
+                  <button
+                    type="button"
+                    onClick={() => (activeTab === 'records' ? openPatrolReplay(contextTask) : openLivePatrolMonitor(contextTask))}
+                  >
+                    {activeTab === 'records' ? '回放' : '监控'}
+                  </button>
                 </article>
                 <article className="template-item">
                   <span>AI</span>
@@ -1943,7 +2077,7 @@ function ClusterControl() {
                 <div className="plan-step-panel route-compose-step">
                   <PlanRoutePreview
                     pointIds={planForm.selectedPointIds}
-                    routePoints={planForm.sceneId === 'lab-building' ? planForm.routePoints : []}
+                    routePoints={getPlanRoutePoints(planForm)}
                     mapData={activePlanMap}
                     selectable
                     onTogglePoint={togglePlanPoint}
@@ -1964,13 +2098,26 @@ function ClusterControl() {
                         {(planForm.sceneId === 'lab-building' ? (planForm.routePoints || []) : planForm.selectedPointIds).map((item, index) => {
                           const point = planForm.sceneId === 'lab-building' ? item : allInspectionPointById[item]
                           const pointId = point.id
+                          const arrivalDirection = getPlanPointDirection(point, planForm.pointDirections)
 
                           return (
                             <article key={pointId}>
                               <span>{String(index + 1).padStart(2, '0')}</span>
                               <strong>{point.targetName}</strong>
                               <small>{planForm.sceneId === 'lab-building' ? `x ${point.x} / y ${point.y}` : point.name}</small>
-                              <div>
+                              <label className="route-direction-control">
+                                <span>到点朝向</span>
+                                <select
+                                  aria-label={`${point.targetName}到点朝向`}
+                                  value={arrivalDirection}
+                                  onChange={(event) => updatePlanPointDirection(pointId, event.target.value)}
+                                >
+                                  {ARRIVAL_DIRECTIONS.map((direction) => (
+                                    <option key={direction.value} value={direction.value}>{direction.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div className="route-order-actions">
                                 <button type="button" onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, -1) : movePlanPoint(pointId, -1))}>上移</button>
                                 <button type="button" onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, 1) : movePlanPoint(pointId, 1))}>下移</button>
                                 <button

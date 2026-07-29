@@ -35,8 +35,10 @@ try:
         open_recognition_stream,
     )
     from .vehicle_client import (
+        cancel_navigation_route,
         get_camera_info,
         get_lidar_info,
+        get_navigation_route_status,
         get_vehicle_status,
         list_vehicles,
         open_camera_stream,
@@ -68,8 +70,10 @@ except ImportError:
         open_recognition_stream,
     )
     from vehicle_client import (
+        cancel_navigation_route,
         get_camera_info,
         get_lidar_info,
+        get_navigation_route_status,
         get_vehicle_status,
         list_vehicles,
         open_camera_stream,
@@ -185,6 +189,11 @@ class NavigationRouteRequest(BaseModel):
     goals: list[NavigationGoalRequest]
 
 
+class NavigationRouteCancelRequest(BaseModel):
+    vehicle_id: str | None = None
+    execution_id: str | None = None
+
+
 class TaskRoutePointRequest(BaseModel):
     id: str | None = None
     pointId: str | None = None
@@ -193,6 +202,8 @@ class TaskRoutePointRequest(BaseModel):
     targetName: str | None = None
     x: float | None = None
     y: float | None = None
+    direction: str | None = None
+    yaw: float | str | None = None
 
 
 class InspectionTaskCreate(BaseModel):
@@ -542,6 +553,7 @@ def _serialize_task(task: InspectionTask) -> dict:
     if not payload.get('routePoints'):
         payload['routePoints'] = [
             {
+                **(point.point_payload or {}),
                 'id': point.point_id,
                 'name': point.point_name,
                 'targetName': point.target_name,
@@ -926,6 +938,24 @@ def vehicle_navigation_route(
     return send_navigation_route(request.vehicle_id, route)
 
 
+@app.get("/api/vehicle/navigation-route/status")
+def vehicle_navigation_route_status(
+    vehicle_id: str | None = None,
+    execution_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+):
+    # 到点进度必须以车端 move_base 的结果为准，不能由网页按时间或距离推测。
+    return get_navigation_route_status(vehicle_id, execution_id)
+
+
+@app.post("/api/vehicle/navigation-route/cancel")
+def vehicle_navigation_route_cancel(
+    request: NavigationRouteCancelRequest,
+    current_user: User = Depends(get_current_user),
+):
+    return cancel_navigation_route(request.vehicle_id, request.execution_id)
+
+
 @app.post("/api/vehicle/stop")
 def vehicle_stop(
     vehicle_id: str | None = None,
@@ -938,19 +968,21 @@ def vehicle_stop(
 @app.get("/api/vehicle/camera")
 def vehicle_camera(
     vehicle_id: str | None = None,
+    camera_role: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
     # 第一版摄像头由 Nano 直接提供 MJPEG，前端拿到地址后用 img 显示。
-    return get_camera_info(vehicle_id)
+    return get_camera_info(vehicle_id, camera_role)
 
 
 @app.get("/api/vehicle/camera/stream")
 def vehicle_camera_stream(
     vehicle_id: str | None = None,
+    camera_role: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
     # 浏览器可能拦截直接访问 Nano 私网 IP 的 MJPEG 图片流，因此这里转成同源代理流。
-    source = open_camera_stream(vehicle_id)
+    source = open_camera_stream(vehicle_id, camera_role)
 
     def iter_stream():
         try:

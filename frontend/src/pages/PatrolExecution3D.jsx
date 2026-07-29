@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { hanlinRoomMap, inspectionPointById } from '../data/hanlinRoomMap'
 import { labBuildingMap, labInspectionPointById } from '../data/labBuildingMap'
 import { saveInspectionResult } from '../utils/inspectionResults'
+import { loadPatrolMonitorContext, savePatrolMonitorContext } from '../utils/patrolMonitor'
 import '../styles/PatrolExecution3D.css'
 
 const SCALE = 0.001
@@ -150,6 +151,13 @@ function quaternionToYaw(orientation) {
   return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 }
 
+function mapYawToSceneRotation(yaw) {
+  // ROS map: yaw=0 points +X and positive yaw turns toward +Y.
+  // Three.js model: the car nose points along local +Z, while map +Y is
+  // rendered toward scene -Z. Therefore positive ROS yaw must be added.
+  return Math.PI / 2 + yaw
+}
+
 function readVehiclePose(status, mapData) {
   const pose = status?.pose?.position || status?.pose || status?.position || status?.odom?.pose?.pose?.position
   if (!pose) return null
@@ -171,6 +179,39 @@ function readVehiclePose(status, mapData) {
   }
 }
 
+function navigationResultsToRoutePoints(navigation, mapData) {
+  return (navigation?.results || []).map((result, index) => {
+    const storedPoint = allInspectionPointById[result.point_id]
+    if (storedPoint) return storedPoint
+
+    const source = result.source || {}
+    const modelPoint = Number.isFinite(Number(source.model_x)) && Number.isFinite(Number(source.model_y))
+      ? { x: Number(source.model_x), y: Number(source.model_y) }
+      : mapPoseToModelPoint({ x: Number(result.x), y: Number(result.y), yaw: Number(result.yaw || 0) }, mapData)
+    if (!modelPoint) return null
+
+    return {
+      id: result.point_id || `ROUTE-${index + 1}`,
+      name: result.point_name || `路线点 ${index + 1}`,
+      targetName: result.point_name || `路线点 ${index + 1}`,
+      x: modelPoint.x,
+      y: modelPoint.y,
+      yaw: result.yaw || 0,
+      recognitionTargets: [],
+    }
+  }).filter(Boolean)
+}
+
+const LIVE_STATE_LABELS = {
+  idle: '等待路线',
+  queued: '路线已接收',
+  moving: '行驶中',
+  arrived: '已到达点位',
+  completed: '巡检完成',
+  failed: '执行失败',
+  cancelled: '已停止',
+}
+
 function addBoxEdges(scene, mesh, color = 0x77ddea) {
   const edges = new THREE.EdgesGeometry(mesh.geometry)
   const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.48 }))
@@ -182,6 +223,7 @@ function PatrolExecution3D() {
   const mountRef = useRef(null)
   const pausedRef = useRef(false)
   const vehiclePoseRef = useRef(null)
+  const navigationRef = useRef(null)
   const [isPaused, setIsPaused] = useState(false)
   const [viewMode, setViewMode] = useState('free')
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -189,26 +231,53 @@ function PatrolExecution3D() {
   const [inspectionPhase, setInspectionPhase] = useState(movingPhase)
   const [completedResults, setCompletedResults] = useState({})
   const [vehicleTelemetry, setVehicleTelemetry] = useState(null)
+  const [liveRoutePoints, setLiveRoutePoints] = useState([])
+  const [cameraAvailable, setCameraAvailable] = useState(true)
+  const [cameraRetryNonce, setCameraRetryNonce] = useState(0)
+  const [isStopping, setIsStopping] = useState(false)
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const task = location.state || {}
-  const isReplayMode = Boolean(task.replayMode)
-  const sceneMap = task.sceneId === 'lab-building' ? labBuildingMap : hanlinRoomMap
+  const query = useMemo(() => new URLSearchParams(location.search), [location.search])
+  const queryExecutionId = query.get('execution_id')
+  const queryTaskId = query.get('task_id')
+  const storedTask = useMemo(
+    () => loadPatrolMonitorContext({ executionId: queryExecutionId, taskId: queryTaskId }),
+    [queryExecutionId, queryTaskId],
+  )
+  const task = useMemo(() => ({ ...(storedTask || {}), ...(location.state || {}) }), [location.state, storedTask])
+  const executionId = queryExecutionId || task.executionId || null
+  const vehicleId = query.get('vehicle_id') || task.robot || 'nano1'
+  const isReplayMode = query.get('replay') === '1' || Boolean(task.replayMode)
+  const sceneMap = task.sceneId === 'power-room' ? hanlinRoomMap : labBuildingMap
   const pointIds = useMemo(() => (
-    task.pointIds?.length ? task.pointIds : sceneMap.inspectionPoints.map((point) => point.id)
-  ), [sceneMap.inspectionPoints, task.pointIds])
+    task.pointIds?.length ? task.pointIds : []
+  ), [task.pointIds])
   const executionRoutePoints = useMemo(() => (
     task.routePoints?.length
       ? task.routePoints
-      : pointIds.map((pointId) => allInspectionPointById[pointId]).filter(Boolean)
-  ), [pointIds, task.routePoints])
+      : pointIds.length
+        ? pointIds.map((pointId) => allInspectionPointById[pointId]).filter(Boolean)
+        : liveRoutePoints
+  ), [liveRoutePoints, pointIds, task.routePoints])
+  const navigation = vehicleTelemetry?.navigation || vehicleTelemetry?.status?.navigation || null
   const currentPoint = executionRoutePoints[currentIndex] || executionRoutePoints[0]
-  const nextPoint = executionRoutePoints[(currentIndex + 1) % executionRoutePoints.length] || currentPoint
-  const previewResult = getRecognitionResult(currentPoint)
-  const currentResult = completedResults[currentPoint?.id] || previewResult
+  const nextPoint = executionRoutePoints[currentIndex + 1] || currentPoint
+  const currentResult = useMemo(() => {
+    if (isReplayMode) {
+      return completedResults[currentPoint?.id] || getRecognitionResult(currentPoint)
+    }
+    return {
+        status: 'normal',
+        summary: navigation?.state === 'arrived' ? '车端已确认到点' : '等待真实识别结果',
+        confidence: '--',
+        metrics: [],
+      }
+  }, [completedResults, currentPoint, isReplayMode, navigation?.state])
   const evidenceImage = getEvidenceImage(currentPoint, currentResult)
-  const evidenceState = inspectionPhase.key === 'moving'
+  const evidenceState = !isReplayMode
+    ? (vehicleTelemetry?.connected ? '实时画面' : '视频离线')
+    : inspectionPhase.key === 'moving'
     ? '等待到点'
     : inspectionPhase.key === 'capture'
       ? '采集中'
@@ -217,32 +286,70 @@ function PatrolExecution3D() {
         : inspectionPhase.key === 'upload'
           ? '上传中'
           : '已归档'
-  const evidenceTime = useMemo(() => (
+  const evidenceTime = (
+    !isReplayMode
+      ? vehicleTelemetry?.lastSuccessAt
+        ? new Date(vehicleTelemetry.lastSuccessAt).toLocaleTimeString('zh-CN', { hour12: false })
+        : '--:--:--'
+      :
     inspectionPhase.key === 'moving'
       ? '--:--:--'
       : new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  ), [currentPoint?.id, inspectionPhase.key])
+  )
   const abnormalRecords = Object.values(completedResults).filter((result) => result.status !== 'normal')
   const vehicleStatus = useMemo(() => {
-    const moving = inspectionPhase.key === 'moving' && !isPaused
     const status = vehicleTelemetry?.status || {}
-    const battery = status.battery ?? status.battery_percent ?? Math.max(38, 82 - Math.floor(routeProgress / 4))
-    const voltage = status.voltage ?? (24.6 - routeProgress * 0.012).toFixed(1)
-    const speed = Number.parseFloat(status.speed ?? status.linear_speed ?? (moving ? 0.2 : 0))
+    const battery = status.battery ?? status.battery_percent
+    const voltage = status.voltage
+    const speed = Number.parseFloat(status.odom_linear_x ?? status.twist?.linear_x ?? status.speed ?? status.linear_speed ?? 0)
+    const localization = status.localization || {}
 
     return {
-      name: task.robot || 'nano1',
-      online: isPaused ? '暂停待命' : '在线',
-      speed: `${Number.isFinite(speed) ? speed.toFixed(1) : '0.0'} m/s`,
-      battery: `${battery}%`,
-      voltage: `${voltage} V`,
-      signal: routeProgress > 78 ? '良好' : '正常',
+      name: vehicleId,
+      online: isReplayMode ? '回放模式' : vehicleTelemetry?.connected ? '在线' : '离线',
+      speed: isReplayMode ? '--' : `${Number.isFinite(speed) ? speed.toFixed(2) : '0.00'} m/s`,
+      battery: battery == null ? '--' : `${battery}%`,
+      voltage: voltage == null ? '--' : `${Number(voltage).toFixed(1)} V`,
+      signal: isReplayMode ? '本地回放' : vehicleTelemetry?.connected ? '正常' : '中断',
+      localization: isReplayMode ? '回放' : localization.valid ? '可信' : localization.last_error || '无有效位姿',
     }
-  }, [inspectionPhase.key, isPaused, routeProgress, task.robot, vehicleTelemetry])
+  }, [isReplayMode, vehicleId, vehicleTelemetry])
   const executionLogs = useMemo(() => {
+    const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    if (!isReplayMode) {
+      const logs = []
+      if (vehicleTelemetry?.error) {
+        logs.push({ time: now, type: '异常', text: vehicleTelemetry.error })
+      }
+      if (navigation?.last_error) {
+        logs.push({ time: now, type: '异常', text: navigation.last_error })
+      }
+      if (navigation) {
+        logs.push({
+          time: now,
+          type: '路线',
+          text: `${LIVE_STATE_LABELS[navigation.state] || navigation.state}，已到达 ${navigation.reached_count || 0}/${navigation.route_total || 0} 个点`,
+        })
+      }
+      const localization = vehicleTelemetry?.status?.localization
+      logs.push({
+        time: now,
+        type: '定位',
+        text: localization?.valid
+          ? `map 位姿有效，时延 ${Number(localization.pose_age || 0).toFixed(2)} s`
+          : localization?.last_error || '等待 map → base_link 位姿',
+      })
+      logs.push({
+        time: now,
+        type: '通信',
+        text: vehicleTelemetry?.connected ? `${vehicleId} 实时状态已连接` : `${vehicleId} 当前离线`,
+      })
+      return logs.slice(0, 6)
+    }
+
     const logs = [
       { time: '08:30:00', type: '任务', text: `${task.taskName || '巡检任务'} 已载入，执行车辆 ${task.robot || 'nano1'}` },
-      { time: '08:30:05', type: '定位', text: '机器人完成初始定位，路线点位已同步' },
+      { time: '08:30:05', type: '回放', text: '演示路线已载入，此模式不读取车辆实时状态' },
     ]
 
     if (currentPoint) {
@@ -260,29 +367,97 @@ function PatrolExecution3D() {
     }
 
     return logs.slice(0, 6)
-  }, [abnormalRecords, currentPoint, currentResult, inspectionPhase.label, isPaused, task.robot, task.taskName])
+  }, [abnormalRecords, currentPoint, currentResult, inspectionPhase.label, isPaused, isReplayMode, navigation, task.robot, task.taskName, vehicleId, vehicleTelemetry])
 
   useEffect(() => {
     pausedRef.current = isPaused
   }, [isPaused])
 
   useEffect(() => {
+    if (isReplayMode || cameraAvailable) return undefined
+    const timer = window.setTimeout(() => {
+      setCameraRetryNonce((value) => value + 1)
+      setCameraAvailable(true)
+    }, 3000)
+    return () => window.clearTimeout(timer)
+  }, [cameraAvailable, isReplayMode])
+
+  useEffect(() => {
+    navigationRef.current = navigation
+    if (isReplayMode || !navigation) return
+
+    const total = Number(navigation.route_total || executionRoutePoints.length || 0)
+    const reached = Math.min(total, Math.max(0, Number(navigation.reached_count || 0)))
+    const oneBasedIndex = Number(navigation.route_index || (total > 0 ? 1 : 0))
+    const index = total > 0 ? Math.min(total - 1, Math.max(0, oneBasedIndex - 1)) : 0
+    setCurrentIndex(index)
+    setRouteProgress(total > 0 ? Math.round((reached / total) * 100) : 0)
+    setInspectionPhase(
+      navigation.state === 'arrived' || navigation.state === 'completed'
+        ? { key: 'complete', label: navigation.state === 'completed' ? '路线完成' : '车端确认到点' }
+        : movingPhase,
+    )
+  }, [executionRoutePoints.length, isReplayMode, navigation])
+
+  useEffect(() => {
     let cancelled = false
 
     const loadVehicleStatus = async () => {
+      if (isReplayMode) return
       try {
-        const response = await fetch(`/api/vehicle/status?vehicle_id=${encodeURIComponent(task.robot || 'nano1')}`, {
+        const response = await fetch(`/api/vehicle/status?vehicle_id=${encodeURIComponent(vehicleId)}`, {
           credentials: 'include',
         })
-        const status = await response.json()
-        if (!response.ok || cancelled) return
+        const status = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(status.detail || `车辆状态请求失败（${response.status}）`)
 
-        const nextPose = readVehiclePose(status, sceneMap)
+        const activeExecutionId = executionId || status.navigation?.execution_id
+        let routeNavigation = status.navigation || null
+        if (activeExecutionId) {
+          const routeResponse = await fetch(
+            `/api/vehicle/navigation-route/status?vehicle_id=${encodeURIComponent(vehicleId)}&execution_id=${encodeURIComponent(activeExecutionId)}`,
+            { credentials: 'include' },
+          )
+          const routeStatus = await routeResponse.json().catch(() => ({}))
+          if (routeResponse.ok) routeNavigation = routeStatus.navigation || routeStatus
+          else if (routeResponse.status !== 404) {
+            throw new Error(routeStatus.detail || `路线状态请求失败（${routeResponse.status}）`)
+          }
+        }
+        if (cancelled) return
+
+        const nextPose = status.localization?.valid === false ? null : readVehiclePose(status, sceneMap)
         vehiclePoseRef.current = nextPose
-        setVehicleTelemetry({ status, pose: nextPose })
+        navigationRef.current = routeNavigation
+        setVehicleTelemetry({
+          connected: Boolean(status.online),
+          status,
+          pose: nextPose,
+          navigation: routeNavigation,
+          lastSuccessAt: Date.now(),
+          error: null,
+        })
+
+        const routePoints = navigationResultsToRoutePoints(routeNavigation, sceneMap)
+        if (routePoints.length > 0) setLiveRoutePoints(routePoints)
+        if (activeExecutionId) {
+          savePatrolMonitorContext({
+            ...task,
+            executionId: activeExecutionId,
+            taskId: routeNavigation?.task_id || task.taskId,
+            taskName: task.taskName || '实验楼一巡检任务',
+            sceneId: task.sceneId || 'lab-building',
+            robot: vehicleId,
+            routePoints: task.routePoints?.length ? task.routePoints : routePoints,
+          })
+        }
       } catch (error) {
         if (!cancelled) {
-          vehiclePoseRef.current = null
+          setVehicleTelemetry((current) => ({
+            ...(current || {}),
+            connected: false,
+            error: error.message,
+          }))
         }
       }
     }
@@ -294,7 +469,7 @@ function PatrolExecution3D() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [sceneMap, task.robot])
+  }, [executionId, isReplayMode, sceneMap, task, vehicleId])
 
   useEffect(() => {
     const mount = mountRef.current
@@ -602,7 +777,7 @@ function PatrolExecution3D() {
     let lastCompletedPointId = ''
     const animate = () => {
       const delta = clock.getDelta()
-      if (!pausedRef.current) {
+      if (isReplayMode && !pausedRef.current) {
         virtualElapsed += delta
       }
       if (routeVectors.length > 0) {
@@ -617,13 +792,12 @@ function PatrolExecution3D() {
         const next = routeVectors[nextIndex]
         const livePose = vehiclePoseRef.current
         const livePoint = livePose?.modelPoint ? toScenePoint(livePose.modelPoint, sceneMap) : null
-        const usingLivePose = Boolean(livePoint)
-        const shouldReplayRoute = isReplayMode || !task.robot
+        const usingLivePose = !isReplayMode && Boolean(livePoint)
+        const shouldReplayRoute = isReplayMode
         const shouldRenderCar = usingLivePose || shouldReplayRoute
+        const liveRouteIndex = Math.max(0, Number(navigationRef.current?.route_index || 1) - 1)
         const displayRouteIndex = usingLivePose
-          ? routeVectors.reduce((bestIndex, point, index) => (
-            point.distanceTo(livePoint) < routeVectors[bestIndex].distanceTo(livePoint) ? index : bestIndex
-          ), 0)
+          ? Math.min(routeVectors.length - 1, liveRouteIndex)
           : shouldReplayRoute ? routeIndex : 0
 
         car.visible = shouldRenderCar
@@ -638,7 +812,7 @@ function PatrolExecution3D() {
         }
         car.position.y = 0.08
         car.rotation.y = usingLivePose
-          ? (Math.PI / 2 - livePose.yaw)
+          ? mapYawToSceneRotation(livePose.yaw)
           : Math.atan2(next.x - current.x, next.z - current.z)
         glow.material.opacity = isDwelling ? 0.46 + Math.sin(virtualElapsed * 8) * 0.14 : 0.22
         glow.scale.setScalar(isDwelling ? 1.12 + Math.sin(virtualElapsed * 8) * 0.08 : 1)
@@ -685,19 +859,19 @@ function PatrolExecution3D() {
         const nextPhase = shouldRenderCar
           ? (isDwelling ? getInspectionPhase(localTime / DWELL_SECONDS) : movingPhase)
           : movingPhase
-        if (displayRouteIndex !== lastUiIndex) {
+        if (isReplayMode && displayRouteIndex !== lastUiIndex) {
           lastUiIndex = displayRouteIndex
           setCurrentIndex(displayRouteIndex)
         }
-        if (nextProgress !== lastUiProgress) {
+        if (isReplayMode && nextProgress !== lastUiProgress) {
           lastUiProgress = nextProgress
           setRouteProgress(nextProgress)
         }
-        if (nextPhase.key !== lastUiPhase) {
+        if (isReplayMode && nextPhase.key !== lastUiPhase) {
           lastUiPhase = nextPhase.key
           setInspectionPhase(nextPhase)
         }
-        if (shouldRenderCar && nextPhase.key === 'complete' && routePoints[displayRouteIndex]?.id !== lastCompletedPointId) {
+        if (isReplayMode && shouldRenderCar && nextPhase.key === 'complete' && routePoints[displayRouteIndex]?.id !== lastCompletedPointId) {
           const completedPoint = routePoints[displayRouteIndex]
           const recognitionResult = getRecognitionResult(completedPoint)
           const primaryMetric = recognitionResult.metrics[0] || { label: recognitionResult.summary, value: '--' }
@@ -745,7 +919,51 @@ function PatrolExecution3D() {
       renderer.dispose()
       mount.removeChild(renderer.domElement)
     }
-  }, [executionRoutePoints, sceneMap, viewMode])
+  }, [executionRoutePoints, isReplayMode, sceneMap, task.robot, task.taskId, task.taskName, viewMode])
+
+  const handleExecutionControl = async () => {
+    if (isReplayMode) {
+      setIsPaused((value) => !value)
+      return
+    }
+    if (!navigation?.execution_id || ['completed', 'failed', 'cancelled', 'idle'].includes(navigation.state)) return
+    if (!window.confirm('确定停止当前巡检路线吗？车端会取消正在执行的 move_base 目标。')) return
+
+    setIsStopping(true)
+    try {
+      const response = await fetch('/api/vehicle/navigation-route/cancel', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicle_id: vehicleId,
+          execution_id: navigation.execution_id,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || '停止巡检失败')
+      navigationRef.current = data.navigation
+      setVehicleTelemetry((current) => ({ ...(current || {}), navigation: data.navigation }))
+    } catch (error) {
+      setVehicleTelemetry((current) => ({ ...(current || {}), error: error.message }))
+    } finally {
+      setIsStopping(false)
+    }
+  }
+
+  const liveStateLabel = isReplayMode
+    ? (isPaused ? '回放已暂停' : '路线回放中')
+    : vehicleTelemetry?.connected
+      ? LIVE_STATE_LABELS[navigation?.state] || '车辆在线'
+      : '车辆离线'
+  const routeTotal = Number(navigation?.route_total || executionRoutePoints.length || 0)
+  const reachedCount = isReplayMode
+    ? Math.min(routeTotal, currentIndex + 1)
+    : Number(navigation?.reached_count || 0)
+  const routeFinished = !isReplayMode && (
+    !navigation?.execution_id
+    || ['completed', 'failed', 'cancelled', 'idle'].includes(navigation?.state)
+  )
 
   return (
     <section className="patrol-3d-page">
@@ -753,24 +971,51 @@ function PatrolExecution3D() {
         <div className="patrol-3d-viewport" ref={mountRef}>
           <div className="patrol-scene-title">
             <span>3D PATROL EXECUTION</span>
-            <strong>{task.taskName || '瀚林1号电房整房巡检'}</strong>
+            <strong>{task.taskName || '实验楼一实时巡检'}</strong>
           </div>
+          {!isReplayMode && (
+            <div className={`live-connection-badge ${vehicleTelemetry?.connected ? 'is-online' : 'is-offline'}`}>
+              <i />
+              {vehicleTelemetry?.connected ? 'REAL-TIME / 车辆在线' : 'OFFLINE / 等待车辆数据'}
+            </div>
+          )}
           <section className="evidence-panel">
             <div className="evidence-head">
               <div>
-                <span>VISUAL EVIDENCE</span>
-                <strong>点位采集图像</strong>
+                <span>{isReplayMode ? 'VISUAL EVIDENCE' : 'LIVE VEHICLE CAMERA'}</span>
+                <strong>{isReplayMode ? '点位采集图像' : '车载实时视频'}</strong>
               </div>
               <b className={`evidence-${inspectionPhase.key}`}>{evidenceState}</b>
             </div>
             <div className="evidence-image">
-              <img src={evidenceImage} alt={`${currentPoint?.targetName || '当前点位'}采集图像`} draggable="false" />
+              {isReplayMode ? (
+                <img src={evidenceImage} alt={`${currentPoint?.targetName || '当前点位'}采集图像`} draggable="false" />
+              ) : cameraAvailable ? (
+                <img
+                  src={`/api/vehicle/camera/stream?vehicle_id=${encodeURIComponent(vehicleId)}&camera_role=movement&retry=${cameraRetryNonce}`}
+                  alt={`${vehicleId} 实时视频`}
+                  draggable="false"
+                  onLoad={() => setCameraAvailable(true)}
+                  onError={() => setCameraAvailable(false)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="camera-retry"
+                  onClick={() => {
+                    setCameraRetryNonce((value) => value + 1)
+                    setCameraAvailable(true)
+                  }}
+                >
+                  视频流不可用，3 秒后自动重连（点击立即重试）
+                </button>
+              )}
               <i />
             </div>
             <dl className="evidence-meta">
               <div><dt>点位</dt><dd>{currentPoint?.targetName || '--'}</dd></div>
               <div><dt>采集时间</dt><dd>{evidenceTime}</dd></div>
-              <div><dt>识别结论</dt><dd>{currentResult.summary}</dd></div>
+              <div><dt>{isReplayMode ? '识别结论' : '执行状态'}</dt><dd>{isReplayMode ? currentResult.summary : liveStateLabel}</dd></div>
             </dl>
           </section>
           <div className="patrol-hud">
@@ -790,15 +1035,15 @@ function PatrolExecution3D() {
             <div className="execution-card primary">
               <div>
                 <span>任务状态</span>
-                <strong>{isPaused ? '已暂停' : inspectionPhase.key === 'moving' ? '行驶中' : '点位巡检'}</strong>
+                <strong>{liveStateLabel}</strong>
               </div>
-              <b>{task.robot || 'nano1'}</b>
+              <b>{vehicleId}</b>
             </div>
 
             <div className="execution-progress">
               <div>
                 <span>路线进度</span>
-                <strong>{currentIndex + 1} / {pointIds.length}</strong>
+                <strong>{reachedCount} / {routeTotal}</strong>
               </div>
               <i><b style={{ width: `${routeProgress}%` }} /></i>
             </div>
@@ -813,7 +1058,7 @@ function PatrolExecution3D() {
               <div className="execution-card compact">
                 <span>下一点位</span>
                 <strong>{nextPoint?.targetName || '--'}</strong>
-                <small>预计 00:18 后到达</small>
+                <small>{navigation?.state === 'completed' ? '路线已完成' : '等待车端逐点确认'}</small>
               </div>
             </div>
           </div>
@@ -829,7 +1074,7 @@ function PatrolExecution3D() {
               <div><dt>速度</dt><dd>{vehicleStatus.speed}</dd></div>
               <div><dt>主电压</dt><dd>{vehicleStatus.voltage}</dd></div>
               <div><dt>通信</dt><dd>{vehicleStatus.signal}</dd></div>
-              <div><dt>控制</dt><dd>{viewMode === 'follow' ? '跟随视角' : '自动巡检'}</dd></div>
+              <div><dt>定位</dt><dd title={vehicleStatus.localization}>{vehicleStatus.localization}</dd></div>
             </div>
           </div>
 
@@ -858,8 +1103,13 @@ function PatrolExecution3D() {
             </div>
           </div>
 
-          <button type="button" className="play-control" onClick={() => setIsPaused((value) => !value)}>
-            {isPaused ? '继续执行' : '暂停巡检'}
+          <button
+            type="button"
+            className="play-control"
+            disabled={isStopping || routeFinished}
+            onClick={handleExecutionControl}
+          >
+            {isReplayMode ? (isPaused ? '继续回放' : '暂停回放') : isStopping ? '正在停止…' : routeFinished ? '路线已结束' : '停止巡检'}
           </button>
         </aside>
       </div>

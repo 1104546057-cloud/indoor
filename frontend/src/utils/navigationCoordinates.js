@@ -40,12 +40,15 @@ export function modelPointToSlamGoal(point, mapData) {
   const mapY = originY + (imageSize.height - pixelY) * resolution
 
   const direction = point.direction ?? point.yaw
+  const yaw = typeof direction === 'number' && Number.isFinite(direction)
+    ? direction
+    : (DIRECTION_TO_YAW[direction] ?? 0)
 
   return {
     frame_id: 'map',
     x: Number(mapX.toFixed(3)),
     y: Number(mapY.toFixed(3)),
-    yaw: Number((DIRECTION_TO_YAW[direction] ?? 0).toFixed(3)),
+    yaw: Number(yaw.toFixed(3)),
     point_id: point.id,
     point_name: point.name,
     source: {

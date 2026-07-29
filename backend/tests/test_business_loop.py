@@ -12,6 +12,7 @@ os.environ['AUTO_CREATE_TABLES'] = 'false'
 from fastapi.testclient import TestClient  # noqa: E402
 
 import backend.business_router as business_router_module  # noqa: E402
+import backend.main as main_module  # noqa: E402
 from backend.database import Base, SessionLocal, engine, get_db  # noqa: E402
 from backend.inspection_service import evaluate_result  # noqa: E402
 from backend.main import app, get_current_user  # noqa: E402
@@ -33,6 +34,52 @@ app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
     username='test-admin', nickname='测试管理员', role='admin', is_active=True
 )
 client = TestClient(app)
+
+
+def test_navigation_route_status_proxy(monkeypatch):
+    def capture_status(vehicle_id, execution_id):
+        assert vehicle_id == 'nano1'
+        assert execution_id == 'route-test-001'
+        return {
+            'vehicle_id': vehicle_id,
+            'navigation': {
+                'execution_id': execution_id,
+                'state': 'moving',
+                'route_index': 2,
+                'route_total': 4,
+                'reached_count': 1,
+            },
+        }
+
+    monkeypatch.setattr(main_module, 'get_navigation_route_status', capture_status)
+    response = client.get(
+        '/api/vehicle/navigation-route/status',
+        params={'vehicle_id': 'nano1', 'execution_id': 'route-test-001'},
+    )
+    assert response.status_code == 200
+    assert response.json()['navigation']['route_index'] == 2
+
+
+def test_navigation_route_cancel_proxy(monkeypatch):
+    def capture_cancel(vehicle_id, execution_id):
+        assert vehicle_id == 'nano1'
+        assert execution_id == 'route-test-001'
+        return {
+            'vehicle_id': vehicle_id,
+            'navigation': {
+                'execution_id': execution_id,
+                'state': 'cancelled',
+                'active': False,
+            },
+        }
+
+    monkeypatch.setattr(main_module, 'cancel_navigation_route', capture_cancel)
+    response = client.post(
+        '/api/vehicle/navigation-route/cancel',
+        json={'vehicle_id': 'nano1', 'execution_id': 'route-test-001'},
+    )
+    assert response.status_code == 200
+    assert response.json()['navigation']['state'] == 'cancelled'
 
 
 def test_real_vehicle_business_loop(monkeypatch):
@@ -161,6 +208,42 @@ def test_task_status_callback_rejects_unknown_task():
         json={'status': 'running', 'progress': 10},
     )
     assert response.status_code == 404
+
+
+def test_task_route_point_arrival_direction_is_persisted():
+    task_id = f'task-direction-{uuid4().hex}'
+    route_point = {
+        'id': 'LAB-FREE-001',
+        'name': '自由点1',
+        'targetName': '自由点1',
+        'x': 28000,
+        'y': 17000,
+        'direction': 'north',
+        'yaw': 'north',
+    }
+
+    created = client.post('/api/tasks', json={
+        'id': task_id,
+        'sceneId': 'lab-building',
+        'name': '到点朝向持久化测试',
+        'robot': 'nano1',
+        'pointIds': [route_point['id']],
+        'routePoints': [route_point],
+        'status': '待执行',
+        'detail': {'pointTotal': 1},
+    })
+    assert created.status_code == 200
+    assert created.json()['task']['routePoints'][0]['direction'] == 'north'
+    assert created.json()['task']['routePoints'][0]['yaw'] == 'north'
+
+    listed = client.get('/api/tasks')
+    assert listed.status_code == 200
+    stored_task = next(task for task in listed.json()['tasks'] if task['id'] == task_id)
+    assert stored_task['routePoints'][0]['direction'] == 'north'
+    assert stored_task['routePoints'][0]['yaw'] == 'north'
+
+    deleted = client.delete(f'/api/tasks/{task_id}')
+    assert deleted.status_code == 200
 
 
 def test_system_user_and_audit_log_are_persisted():

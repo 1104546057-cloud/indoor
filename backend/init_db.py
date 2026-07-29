@@ -5,6 +5,7 @@ import pymysql
 from dotenv import load_dotenv
 from passlib.context import CryptContext
 from pymysql.err import OperationalError as PyMySQLOperationalError
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import OperationalError
 
 try:
@@ -75,6 +76,91 @@ def create_tables():
     Base.metadata.create_all(bind=engine)
 
 
+def migrate_legacy_schema():
+    """给 create_all 无法自动更新的旧表补充新增字段、索引和外键。
+
+    SQLAlchemy 的 create_all 只负责创建不存在的表，不会 ALTER 已存在的表。
+    早期版本的 tb_recognition_result 因此可能缺少业务关联字段。此迁移是
+    幂等的：每次初始化都先检查现有结构，只添加缺失对象。
+    """
+
+    table_name = 'tb_recognition_result'
+    column_definitions = {
+        'inspection_record_id': 'INT NULL',
+        'image_id': 'INT NULL',
+        'device_item_id': 'INT NULL',
+        'numeric_value': 'FLOAT NULL',
+    }
+    indexed_columns = {
+        'inspection_record_id': 'ix_tb_recognition_result_inspection_record_id',
+        'image_id': 'ix_tb_recognition_result_image_id',
+        'device_item_id': 'ix_tb_recognition_result_device_item_id',
+    }
+    foreign_keys = {
+        'inspection_record_id': (
+            'fk_tb_recognition_result_inspection_record_id',
+            'tb_inspection_record',
+            'id',
+        ),
+        'image_id': (
+            'fk_tb_recognition_result_image_id',
+            'tb_image',
+            'id',
+        ),
+        'device_item_id': (
+            'fk_tb_recognition_result_device_item_id',
+            'tb_device_item',
+            'id',
+        ),
+    }
+
+    with engine.begin() as connection:
+        schema = inspect(connection)
+        if not schema.has_table(table_name):
+            return
+
+        existing_columns = {column['name'] for column in schema.get_columns(table_name)}
+        for column_name, definition in column_definitions.items():
+            if column_name in existing_columns:
+                continue
+            connection.execute(text(
+                f'ALTER TABLE `{table_name}` '
+                f'ADD COLUMN `{column_name}` {definition}'
+            ))
+            print(f'Added column: {table_name}.{column_name}')
+
+        # DDL 执行后重新读取结构，避免使用 Inspector 的旧缓存。
+        schema = inspect(connection)
+        existing_indexes = {
+            tuple(index.get('column_names') or [])
+            for index in schema.get_indexes(table_name)
+        }
+        for column_name, index_name in indexed_columns.items():
+            if (column_name,) in existing_indexes:
+                continue
+            connection.execute(text(
+                f'CREATE INDEX `{index_name}` '
+                f'ON `{table_name}` (`{column_name}`)'
+            ))
+            print(f'Added index: {index_name}')
+
+        schema = inspect(connection)
+        existing_foreign_keys = {
+            tuple(foreign_key.get('constrained_columns') or [])
+            for foreign_key in schema.get_foreign_keys(table_name)
+        }
+        for column_name, (constraint_name, referenced_table, referenced_column) in foreign_keys.items():
+            if (column_name,) in existing_foreign_keys:
+                continue
+            connection.execute(text(
+                f'ALTER TABLE `{table_name}` '
+                f'ADD CONSTRAINT `{constraint_name}` '
+                f'FOREIGN KEY (`{column_name}`) '
+                f'REFERENCES `{referenced_table}` (`{referenced_column}`)'
+            ))
+            print(f'Added foreign key: {constraint_name}')
+
+
 def create_admin_user():
     """创建或更新默认管理员账号。"""
 
@@ -115,6 +201,7 @@ def init_database():
     try:
         ensure_database_exists()
         create_tables()
+        migrate_legacy_schema()
         create_admin_user()
         print('Database initialized successfully.')
     except OperationalError as error:

@@ -1,0 +1,14 @@
+[Unit]
+Description=Indoor patrol movement camera MJPEG service
+After=default.target
+
+[Service]
+Type=simple
+Environment=OPENCV_VIDEOIO_PRIORITY_V4L2=1000
+Environment=OPENCV_VIDEOIO_PRIORITY_GSTREAMER=0
+ExecStart=/usr/bin/python3 /home/nano1/indoor_patrol_ws/src/indoor_patrol_bringup/scripts/movement_camera_mjpeg_server.py --host 0.0.0.0 --port 8080 --device 0 --width 640 --height 480 --fps 20 --jpeg-quality 85
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

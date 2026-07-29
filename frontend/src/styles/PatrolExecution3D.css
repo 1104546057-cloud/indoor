@@ -99,6 +99,40 @@
   letter-spacing: 1px;
 }
 
+.live-connection-badge {
+  position: absolute;
+  left: 18px;
+  top: 90px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(158, 223, 234, 0.24);
+  color: #9edfea;
+  background: rgba(3, 18, 30, 0.82);
+  font: 800 10px/1 "Courier New", monospace;
+  letter-spacing: 0.8px;
+}
+
+.live-connection-badge i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff685f;
+  box-shadow: 0 0 10px rgba(255, 104, 95, 0.82);
+}
+
+.live-connection-badge.is-online {
+  color: #35f0bd;
+  border-color: rgba(53, 240, 189, 0.36);
+}
+
+.live-connection-badge.is-online i {
+  background: #35f0bd;
+  box-shadow: 0 0 10px rgba(53, 240, 189, 0.82);
+}
+
 .patrol-3d-viewport canvas {
   position: absolute;
   inset: 0;
@@ -180,6 +214,20 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.camera-retry {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  color: #9edfea;
+  background:
+    linear-gradient(rgba(158, 223, 234, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(158, 223, 234, 0.04) 1px, transparent 1px),
+    #071822;
+  background-size: 16px 16px;
+  cursor: pointer;
+  font-weight: 800;
 }
 
 .evidence-image i {
@@ -687,6 +735,12 @@
   background: rgba(8, 45, 63, 0.58);
   cursor: pointer;
   font-weight: 900;
+}
+
+.play-control:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.7);
+  opacity: 0.55;
 }
 
 .view-controls button.active,

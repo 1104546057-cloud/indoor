@@ -14,7 +14,7 @@
 D:\Anaconda\envs\Env11\python.exe -m pip install -r backend/requirements.txt
 D:\Anaconda\envs\Env11\python.exe -m alembic upgrade head
 D:\Anaconda\envs\Env11\python.exe -m backend.init_db
-D:\Anaconda\envs\Env11\python.exe -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+D:\Anaconda\envs\Env11\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 启动后可访问：
