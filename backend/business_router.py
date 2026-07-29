@@ -379,7 +379,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         records = (
             db.query(InspectionRecord)
             .options(
-                selectinload(InspectionRecord.task),
+                selectinload(InspectionRecord.task).selectinload(InspectionTask.route_points),
                 selectinload(InspectionRecord.route),
                 selectinload(InspectionRecord.robot),
             )
@@ -407,6 +407,10 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'recordCode': record.record_code,
                     'taskId': record.task_id,
                     'taskName': record.task.name if record.task else None,
+                    'taskSceneId': record.task.scene_id if record.task else None,
+                    'taskArea': record.task.area if record.task else None,
+                    'taskRouteId': record.task.route_id if record.task else None,
+                    'createdBy': record.task.created_by if record.task else None,
                     'routeName': record.route.name if record.route else None,
                     'robotName': record.robot.name if record.robot else None,
                     'status': record.status,
@@ -416,6 +420,19 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'failureReason': record.failure_reason,
                     'startedAt': record.started_at.isoformat(sep=' ') if record.started_at else None,
                     'finishedAt': record.finished_at.isoformat(sep=' ') if record.finished_at else None,
+                    'routePoints': [
+                        {
+                            **(point.point_payload or {}),
+                            'id': point.point_id,
+                            'name': point.point_name,
+                            'targetName': point.target_name,
+                            'x': point.x,
+                            'y': point.y,
+                            'sequence': point.sequence,
+                        }
+                        for point in (record.task.route_points if record.task else [])
+                        if point.x is not None and point.y is not None
+                    ],
                 }
                 for record in records
             ],
@@ -425,6 +442,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'recordId': image.record_id,
                     'pointId': image.point_id,
                     'cabinetId': image.cabinet_id,
+                    'imageType': image.image_type,
                     'sequence': image.sequence,
                     'fileUrl': image.file_url,
                     'capturedAt': image.captured_at.isoformat(sep=' ') if image.captured_at else None,
@@ -440,14 +458,21 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'cabinetCode': result.cabinet_code,
                     'pointId': result.point_id,
                     'itemCode': result.item_code,
+                    'robotId': result.robot_id,
+                    'imageId': result.image_id,
                     'targetName': result.target_name,
                     'recognitionType': result.recognition_type,
                     'value': result.recognition_value,
+                    'numericValue': result.numeric_value,
                     'unit': result.unit,
+                    'recognitionState': result.recognition_state,
+                    'standardRange': result.standard_range,
                     'confidence': result.confidence,
                     'status': result.status,
                     'imageUrl': result.image_url,
                     'reviewStatus': result.review_status,
+                    'reviewRemark': result.review_remark,
+                    'reviewedBy': result.reviewed_by,
                     'reviewedAt': result.reviewed_at.isoformat(sep=' ') if result.reviewed_at else None,
                     'capturedAt': result.captured_at.isoformat(sep=' ') if result.captured_at else None,
                 }

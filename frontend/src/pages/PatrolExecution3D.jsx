@@ -225,7 +225,7 @@ function PatrolExecution3D() {
   const vehiclePoseRef = useRef(null)
   const navigationRef = useRef(null)
   const [isPaused, setIsPaused] = useState(false)
-  const [viewMode, setViewMode] = useState('free')
+  const [viewMode, setViewMode] = useState('follow')
   const [currentIndex, setCurrentIndex] = useState(0)
   const [routeProgress, setRouteProgress] = useState(0)
   const [inspectionPhase, setInspectionPhase] = useState(movingPhase)

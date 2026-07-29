@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LabBuilding3DPreview from '../components/LabBuilding3DPreview'
 import RouteManagementPanel from '../components/RouteManagementPanel'
+import useBusinessOverview from '../hooks/useBusinessOverview'
 import { hanlinRoomMap, inspectionPointById } from '../data/hanlinRoomMap'
 import { labBuildingMap, labInspectionPointById } from '../data/labBuildingMap'
 import { getInspectionResults, subscribeInspectionResults, updateInspectionResultReview } from '../utils/inspectionResults'
@@ -48,9 +49,63 @@ const DIRECTION_VECTORS = {
   west: { x: -1, y: 0 },
   south: { x: 0, y: 1 },
 }
+const LIVE_NAVIGATION_LABELS = {
+  idle: '等待路线',
+  queued: '路线已接收',
+  moving: '行驶中',
+  arrived: '已到达点位',
+  completed: '巡检完成',
+  failed: '执行失败',
+  cancelled: '已停止',
+}
 
 function getSceneMap(sceneId = 'power-room') {
   return sceneMaps[sceneId] || hanlinRoomMap
+}
+
+function quaternionToYaw(orientation) {
+  if (!orientation || orientation.z === undefined || orientation.w === undefined) return null
+
+  const x = Number(orientation.x || 0)
+  const y = Number(orientation.y || 0)
+  const z = Number(orientation.z)
+  const w = Number(orientation.w)
+  if (![x, y, z, w].every(Number.isFinite)) return null
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+}
+
+function mapPoseToModelPoint(pose, mapData) {
+  const slamMap = mapData?.slamMap
+  if (!pose || !slamMap?.coverage || !slamMap?.imageSize || !slamMap?.yaml) return null
+
+  const [originX, originY] = slamMap.yaml.origin
+  const resolution = slamMap.yaml.resolution
+  const pixelX = (pose.x - originX) / resolution
+  const pixelY = slamMap.imageSize.height - ((pose.y - originY) / resolution)
+  const normalizedX = slamMap.transform?.flipX ? 1 - (pixelX / slamMap.imageSize.width) : pixelX / slamMap.imageSize.width
+  const normalizedY = slamMap.transform?.flipY ? 1 - (pixelY / slamMap.imageSize.height) : pixelY / slamMap.imageSize.height
+
+  return {
+    x: slamMap.coverage.x + normalizedX * slamMap.coverage.width,
+    y: slamMap.coverage.y + normalizedY * slamMap.coverage.depth,
+  }
+}
+
+function readVehiclePose(status, mapData) {
+  const position = status?.pose?.position || status?.pose || status?.position || status?.odom?.pose?.pose?.position
+  if (!position) return null
+
+  const orientation = status?.orientation || status?.pose?.orientation || status?.odom?.pose?.pose?.orientation
+  const yaw = status?.yaw ?? status?.theta ?? status?.pose?.yaw ?? orientation?.yaw ?? quaternionToYaw(orientation)
+  const pose = {
+    x: Number(position.x),
+    y: Number(position.y),
+    yaw: Number.isFinite(Number(yaw)) ? Number(yaw) : 0,
+  }
+  if (!Number.isFinite(pose.x) || !Number.isFinite(pose.y)) return null
+
+  const modelPoint = mapPoseToModelPoint(pose, mapData)
+  return modelPoint ? { ...pose, modelPoint } : null
 }
 
 const initialTasks = [
@@ -179,17 +234,7 @@ const wholeRoomScope = {
   priority: '项',
 }
 
-const routeTemplates = [
-  {
-    ...wholeRoomScope,
-    name: '整房全量巡检任务',
-    meta: `${hanlinRoomMap.inspectionPoints.length} 个固定点 / 单车巡检`,
-    pointIds: getAreaPointIds(),
-  },
-]
-
 const taskColumns = ['任务名称', '区域', '机器人', '开始时间', '状态', '进度', '操作']
-const archiveColumns = ['档案编号', '任务名称', '巡检时间', '用时', '点位', '异常', '复核', '操作']
 const aiColumns = ['识别对象', '任务 / 点位', '识别值', '标准范围', '置信度', '状态', '复核', '操作']
 const reportColumns = ['报告编号', '巡检任务', '巡检时间', '点位', '异常', '复核', '报告状态', '操作']
 
@@ -260,6 +305,18 @@ function getPlanRoutePoints(form) {
     })
 }
 
+function getPresetPlanRoutePoints(sceneId) {
+  return getNavigablePointIds(sceneId)
+    .map((pointId) => allInspectionPointById[pointId])
+    .filter(Boolean)
+    .map((point) => {
+      const direction = getPlanPointDirection(point)
+      return { ...point, direction, yaw: direction }
+    })
+}
+
+const defaultLabRoutePoints = getPresetPlanRoutePoints('lab-building')
+
 const defaultPlanForm = {
   name: '实验楼一层环廊巡检任务',
   sceneId: 'lab-building',
@@ -269,8 +326,8 @@ const defaultPlanForm = {
   robot: wholeRoomScope.robot,
   startDate: '2026-06-22',
   startTime: '09:30',
-  selectedPointIds: [],
-  routePoints: [],
+  selectedPointIds: defaultLabRoutePoints.map((point) => point.id),
+  routePoints: defaultLabRoutePoints,
   pointDirections: {},
   priority: wholeRoomScope.priority,
 }
@@ -479,14 +536,270 @@ function buildArchiveRecord(task, storedResults) {
 
   return {
     ...task,
-    archiveNo: `ARC-${task.start.slice(2, 10).replaceAll('-', '')}-${task.robot.toUpperCase()}`,
+    taskId: task.id,
+    archiveNo: `ARC-${task.start.slice(2, 10).replaceAll('-', '')}-${task.robot.toUpperCase()}-${String(task.id).slice(-6).toUpperCase()}`,
     endTime: getTaskEndTime(task),
     duration: getArchiveDuration(task),
+    routeName: task.routeName || task.area,
+    failureReason: task.status === '异常' ? '任务异常中断，等待复核' : '',
     abnormalCount,
     reviewedCount,
     reviewState: abnormalCount === 0 ? '无需复核' : (reviewedCount >= abnormalCount ? '已复核' : '待复核'),
     resultCount: relatedResults.length || task.aiPreview.length,
+    recognitionResults: relatedResults,
+    images: relatedResults
+      .filter((result) => result.imageUrl)
+      .map((result, index) => ({
+        id: result.imageId || `${task.id}-image-${index}`,
+        fileUrl: result.imageUrl,
+        pointId: result.pointId,
+        capturedAt: result.capturedAt,
+        imageType: result.imageType || 'visible',
+      })),
+    source: 'demo',
   }
+}
+
+const TERMINAL_RECORD_STATES = new Set(['completed', 'failed', 'cancelled', '已完成', '异常', '待审核'])
+const RECORD_STATUS_LABELS = {
+  completed: '已完成',
+  success: '已完成',
+  failed: '异常',
+  cancelled: '待审核',
+  interrupted: '异常',
+}
+
+function normalizeRecordStatus(status) {
+  return RECORD_STATUS_LABELS[status] || status || '未知'
+}
+
+function formatArchiveDateTime(value, fallback = '--') {
+  if (!value) return fallback
+  return String(value).replace('T', ' ').slice(0, 19)
+}
+
+function formatRealDuration(startValue, endValue) {
+  if (!startValue || !endValue) return '未结束'
+  const start = new Date(String(startValue).replace(' ', 'T'))
+  const end = new Date(String(endValue).replace(' ', 'T'))
+  const minutes = Math.round((end.getTime() - start.getTime()) / 60000)
+  if (!Number.isFinite(minutes) || minutes < 0) return '时间异常'
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const remain = minutes % 60
+  return `${hours} 小时${remain ? ` ${remain} 分` : ''}`
+}
+
+function formatRecognitionConfidence(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '--'
+  const percentage = numeric <= 1 ? numeric * 100 : numeric
+  return `${percentage.toFixed(1)}%`
+}
+
+function mapBusinessResultToPreview(result) {
+  const value = [result.value, result.unit].filter(Boolean).join(' ') || '--'
+  return {
+    id: result.id,
+    pointId: result.pointId,
+    targetName: result.targetName || result.itemCode || '未命名识别项',
+    title: result.targetName || result.recognitionType || 'AI识别',
+    recognitionType: result.recognitionType || 'AI识别',
+    value,
+    standardRange: result.standardRange || '未配置',
+    confidence: formatRecognitionConfidence(result.confidence),
+    capturedAt: formatArchiveDateTime(result.capturedAt),
+    time: formatArchiveDateTime(result.capturedAt).slice(11, 19),
+    status: result.status || '正常',
+    reviewStatus: result.reviewStatus || '待复核',
+    reviewRemark: result.reviewRemark,
+    reviewedBy: result.reviewedBy,
+    reviewedAt: formatArchiveDateTime(result.reviewedAt),
+    imageUrl: result.imageUrl,
+    visual: result.recognitionType?.includes('数显') ? 'digital' : 'meter',
+  }
+}
+
+function normalizeArchiveRoutePoints(points, sceneId) {
+  const mapData = getSceneMap(sceneId || 'lab-building')
+  return (points || []).map((point, index) => {
+    const x = Number(point.x)
+    const y = Number(point.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+
+    const appearsToBeRosMapPose = Boolean(mapData.slamMap) && Math.abs(x) < 1000 && Math.abs(y) < 1000
+    const modelPoint = appearsToBeRosMapPose ? mapPoseToModelPoint({ x, y }, mapData) : { x, y }
+    if (!modelPoint) return null
+    return {
+      ...point,
+      id: point.id || `ARCHIVE-P${String(index + 1).padStart(2, '0')}`,
+      name: point.name || point.targetName || `路线点 ${index + 1}`,
+      targetName: point.targetName || point.name || `路线点 ${index + 1}`,
+      x: modelPoint.x,
+      y: modelPoint.y,
+    }
+  }).filter(Boolean)
+}
+
+function buildBusinessArchiveRecords(business, taskList) {
+  const records = business?.records || []
+  const results = business?.results || []
+  const images = business?.images || []
+  const taskById = Object.fromEntries(taskList.map((task) => [task.id, task]))
+
+  return records
+    .filter((record) => TERMINAL_RECORD_STATES.has(record.status))
+    .map((record) => {
+      const task = taskById[record.taskId] || {}
+      const relatedResults = results
+        .filter((result) => result.recordId === record.id || (!result.recordId && result.taskId === record.taskId))
+        .map(mapBusinessResultToPreview)
+        .sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))
+      const relatedImages = images
+        .filter((image) => image.recordId === record.id)
+        .map((image) => ({
+          ...image,
+          fileUrl: image.fileUrl,
+          capturedAt: formatArchiveDateTime(image.capturedAt),
+        }))
+      const imageKeys = new Set(relatedImages.map((image) => image.fileUrl))
+      relatedResults.forEach((result, index) => {
+        if (result.imageUrl && !imageKeys.has(result.imageUrl)) {
+          relatedImages.push({
+            id: `result-image-${record.id}-${index}`,
+            fileUrl: result.imageUrl,
+            pointId: result.pointId,
+            capturedAt: result.capturedAt,
+            imageType: 'recognition',
+          })
+          imageKeys.add(result.imageUrl)
+        }
+      })
+
+      const status = normalizeRecordStatus(record.status)
+      const pointTotal = Number(record.pointTotal || task.detail?.pointTotal || task.routePoints?.length || 0)
+      const currentPoint = status === '已完成'
+        ? pointTotal
+        : Number(record.currentSequence || task.detail?.currentPoint || 0)
+      const abnormalResults = relatedResults.filter((result) => ['异常', '告警'].includes(result.status))
+      const reviewedCount = abnormalResults.filter((result) => result.reviewStatus && result.reviewStatus !== '待复核').length
+      const abnormalCount = abnormalResults.length
+      const reviewState = abnormalCount === 0 ? '无需复核' : reviewedCount >= abnormalCount ? '已复核' : '待复核'
+      const startedAt = formatArchiveDateTime(record.startedAt || task.start)
+      const finishedAt = formatArchiveDateTime(record.finishedAt, status === '已完成' ? startedAt : '--')
+      const startTimeline = {
+        time: startedAt.slice(11, 16),
+        label: '任务开始执行',
+        type: 'GO',
+        state: 'done',
+      }
+      const resultTimeline = [...relatedResults]
+        .reverse()
+        .map((result) => ({
+          time: result.time.slice(0, 5),
+          label: `${result.targetName}：${result.value}`,
+          type: ['异常', '告警'].includes(result.status) ? 'AL' : 'AI',
+          state: ['异常', '告警'].includes(result.status) ? 'alarm' : 'done',
+        }))
+      const finishTimeline = {
+        time: finishedAt === '--' ? '--:--' : finishedAt.slice(11, 16),
+        label: status === '已完成' ? '巡检完成并归档' : record.failureReason || '任务中断',
+        type: status === '已完成' ? 'END' : 'STOP',
+        state: status === '已完成' ? 'done' : 'alarm',
+      }
+      const sceneId = record.taskSceneId || task.sceneId || 'lab-building'
+      const routePoints = normalizeArchiveRoutePoints(
+        record.routePoints?.length ? record.routePoints : (task.routePoints || []),
+        sceneId,
+      )
+
+      return {
+        ...task,
+        id: `record-${record.id}`,
+        recordId: record.id,
+        taskId: record.taskId || task.id,
+        archiveNo: record.recordCode || `REC-${record.id}`,
+        name: record.taskName || task.name || '未命名巡检任务',
+        area: record.taskArea || task.area || record.routeName || '未配置区域',
+        sceneId,
+        robot: record.robotName || task.robot || '未绑定',
+        routeName: record.routeName || task.routeName || record.taskRouteId || '自定义路线',
+        routePoints,
+        pointIds: routePoints.map((point) => point.id).filter(Boolean),
+        start: startedAt,
+        endTime: finishedAt,
+        duration: formatRealDuration(startedAt, finishedAt === '--' ? null : finishedAt),
+        status,
+        progress: Number(record.progress ?? (status === '已完成' ? 100 : 0)),
+        detail: {
+          pointTotal,
+          currentPoint,
+          eta: finishedAt === '--' ? '未结束' : finishedAt.slice(11, 16),
+          abnormalCount,
+        },
+        abnormalCount,
+        reviewedCount,
+        reviewState,
+        resultCount: relatedResults.length,
+        recognitionResults: relatedResults,
+        aiPreview: relatedResults.slice(0, 3),
+        images: relatedImages,
+        failureReason: record.failureReason || '',
+        createdBy: record.createdBy || '系统',
+        timeline: [startTimeline, ...resultTimeline, finishTimeline],
+        source: 'business',
+      }
+    })
+    .sort((a, b) => b.start.localeCompare(a.start))
+}
+
+function exportArchiveCsv(records) {
+  const headers = ['档案编号', '任务名称', '区域', '机器人', '开始时间', '结束时间', '用时', '路线进度', '异常数量', '复核状态', '任务结论']
+  const rows = records.map((record) => [
+    record.archiveNo,
+    record.name,
+    record.area,
+    record.robot,
+    record.start,
+    record.endTime,
+    record.duration,
+    `${record.detail.currentPoint}/${record.detail.pointTotal}`,
+    record.abnormalCount,
+    record.reviewState,
+    record.status,
+  ])
+  const escapeCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`
+  const csv = [headers, ...rows].map((row) => row.map(escapeCell).join(',')).join('\r\n')
+  const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `巡检档案-${new Date().toISOString().slice(0, 10)}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function buildArchiveAiRecords(archiveRecords) {
+  return archiveRecords.flatMap((archive) => (
+    (archive.recognitionResults || []).map((result, index) => ({
+      ...result,
+      id: result.id || `${archive.id}-result-${index}`,
+      source: archive.source === 'business' ? 'business' : 'stored',
+      taskId: archive.taskId || archive.id,
+      taskName: archive.name,
+      area: archive.area,
+      robot: archive.robot,
+      targetName: result.targetName || result.title || '未命名识别项',
+      recognitionType: result.recognitionType || 'AI识别',
+      pointName: result.pointId || `P${String(index + 1).padStart(2, '0')}`,
+      value: result.value || '--',
+      standardRange: result.standardRange || '未配置',
+      confidence: result.confidence || '--',
+      capturedAt: result.capturedAt || result.time || '--',
+      status: result.status || '正常',
+      reviewStatus: result.reviewStatus || '待复核',
+      visual: result.visual || 'digital',
+    }))
+  ))
 }
 
 function getTaskById(taskList, taskId) {
@@ -566,7 +879,7 @@ function buildReportRecords(archiveRecords) {
 
     return {
       ...record,
-      reportNo: `RPT-${record.start.slice(2, 10).replaceAll('-', '')}-${record.robot.toUpperCase()}`,
+      reportNo: `RPT-${String(record.archiveNo || record.id).replace(/^(ARC|REC)-?/, '')}`,
       reportStatus,
       generatedAt: reportStatus === '已生成' ? `${record.start.slice(0, 10)} 17:05` : '--',
     }
@@ -588,110 +901,413 @@ function ProgressBar({ value, status }) {
   )
 }
 
-function PatrolArchiveView({ archiveRecords, selectedTask, onSelect, onReplay, onShowAi, onReport }) {
-  const selectedArchive = archiveRecords.find((record) => record.id === selectedTask.id) || archiveRecords[0]
+function PatrolArchiveView({
+  archiveRecords,
+  selectedArchiveId,
+  onSelect,
+  onReplay,
+  onShowAi,
+  onReport,
+  loading,
+  error,
+  onReload,
+}) {
+  const [query, setQuery] = useState('')
+  const [dateRange, setDateRange] = useState('all')
+  const [conclusion, setConclusion] = useState('all')
+  const [robot, setRobot] = useState('all')
+  const [sortBy, setSortBy] = useState('newest')
+  const [page, setPage] = useState(1)
+  const [detailTab, setDetailTab] = useState('summary')
+  const pageSize = 8
+  const robots = useMemo(
+    () => [...new Set(archiveRecords.map((record) => record.robot).filter(Boolean))].sort(),
+    [archiveRecords],
+  )
+  const filteredRecords = useMemo(() => {
+    const now = new Date()
+    const startBoundary = new Date(now)
+    if (dateRange === 'today') startBoundary.setHours(0, 0, 0, 0)
+    if (dateRange === '7d') startBoundary.setDate(now.getDate() - 7)
+    if (dateRange === '30d') startBoundary.setDate(now.getDate() - 30)
+    const normalizedQuery = query.trim().toLowerCase()
+
+    return archiveRecords
+      .filter((record) => {
+        const searchable = [
+          record.archiveNo,
+          record.name,
+          record.area,
+          record.routeName,
+          record.robot,
+          record.failureReason,
+        ].join(' ').toLowerCase()
+        if (normalizedQuery && !searchable.includes(normalizedQuery)) return false
+        if (dateRange !== 'all') {
+          const startedAt = new Date(String(record.start).replace(' ', 'T'))
+          if (!Number.isFinite(startedAt.getTime()) || startedAt < startBoundary) return false
+        }
+        if (robot !== 'all' && record.robot !== robot) return false
+        if (conclusion === 'completed' && record.status !== '已完成') return false
+        if (conclusion === 'abnormal' && record.abnormalCount === 0 && record.status !== '异常') return false
+        if (conclusion === 'interrupted' && !['异常', '待审核'].includes(record.status)) return false
+        if (conclusion === 'pending' && record.reviewState !== '待复核') return false
+        return true
+      })
+      .sort((a, b) => {
+        if (sortBy === 'oldest') return a.start.localeCompare(b.start)
+        if (sortBy === 'abnormal') return b.abnormalCount - a.abnormalCount || b.start.localeCompare(a.start)
+        return b.start.localeCompare(a.start)
+      })
+  }, [archiveRecords, conclusion, dateRange, query, robot, sortBy])
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageRecords = filteredRecords.slice((safePage - 1) * pageSize, safePage * pageSize)
+  const selectedArchive = filteredRecords.find((record) => record.id === selectedArchiveId) || filteredRecords[0] || null
+  const selectedRoutePoints = selectedArchive?.routePoints || []
+  const selectedMap = getSceneMap(selectedArchive?.sceneId || 'lab-building')
+  const selectedResults = selectedArchive?.recognitionResults || []
+  const selectedImages = selectedArchive?.images || []
+  const abnormalResults = selectedResults.filter((result) => ['异常', '告警'].includes(result.status))
   const archiveStats = [
-    { label: '历史档案', value: archiveRecords.length, unit: '项' },
-    { label: '完成巡检', value: archiveRecords.filter((record) => record.status === '已完成').length, unit: '项' },
-    { label: '异常追溯', value: archiveRecords.filter((record) => record.abnormalCount > 0).length, unit: '项' },
-    { label: '待复核', value: archiveRecords.filter((record) => record.reviewState === '待复核').length, unit: '项' },
+    { label: '查询结果', value: filteredRecords.length, unit: '项' },
+    { label: '完成巡检', value: filteredRecords.filter((record) => record.status === '已完成').length, unit: '项' },
+    { label: '异常档案', value: filteredRecords.filter((record) => record.abnormalCount > 0 || record.status === '异常').length, unit: '项' },
+    { label: '待复核', value: filteredRecords.filter((record) => record.reviewState === '待复核').length, unit: '项' },
+  ]
+  const detailTabs = [
+    { id: 'summary', label: '任务概览' },
+    { id: 'route', label: '历史轨迹' },
+    { id: 'results', label: `点位结果 ${selectedResults.length}` },
+    { id: 'evidence', label: `图片证据 ${selectedImages.length}` },
+    { id: 'review', label: `异常复核 ${abnormalResults.length}` },
   ]
 
+  useEffect(() => {
+    setPage(1)
+  }, [conclusion, dateRange, query, robot, sortBy])
+
+  useEffect(() => {
+    setDetailTab('summary')
+  }, [selectedArchive?.id])
+
+  const resetFilters = () => {
+    setQuery('')
+    setDateRange('all')
+    setConclusion('all')
+    setRobot('all')
+    setSortBy('newest')
+  }
+
   return (
-    <section className="console-panel archive-panel">
-      <div className="panel-heading archive-heading">
-        <div>
-          <h2>历史巡检档案</h2>
-          <p>只展示已完成、异常或已中断的巡检结果，用于回看全过程和追溯异常来源。</p>
-        </div>
-        <div className="task-filters archive-filters">
-          <label>日期<select defaultValue="today"><option value="today">今日</option></select></label>
-          <label>结论<select defaultValue="all"><option value="all">全部</option></select></label>
-          <label>机器人<select defaultValue="all"><option value="all">全部</option></select></label>
-        </div>
-      </div>
-
-      <div className="archive-kpi-grid">
-        {archiveStats.map((item) => (
-          <article key={item.label}>
-            <span>{item.label}</span>
-            <strong>{String(item.value).padStart(2, '0')}<em>{item.unit}</em></strong>
-          </article>
-        ))}
-      </div>
-
-      <div className="archive-workspace">
-        <div className="archive-table">
-          <div className="archive-table-row archive-table-head">
-            {archiveColumns.map((column) => <span key={column}>{column}</span>)}
+    <section className="console-panel archive-panel archive-panel-refined">
+      <div className="archive-toolbar">
+        <div className="archive-title-block">
+          <div>
+            <h2>历史巡检档案</h2>
+            <span className={`archive-source-badge ${archiveRecords[0]?.source === 'business' ? 'real' : 'fallback'}`}>
+              {archiveRecords[0]?.source === 'business' ? '数据库档案' : '演示兜底数据'}
+            </span>
           </div>
-          <div className="archive-table-body">
-            {archiveRecords.map((record) => (
-              <article
-                role="button"
-                tabIndex={0}
-                className={`archive-table-row${selectedArchive?.id === record.id ? ' selected' : ''}`}
-                key={record.id}
-                onClick={() => onSelect(record.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    onSelect(record.id)
-                  }
-                }}
-              >
-                <span className="archive-no">{record.archiveNo}</span>
-                <strong>{record.name}<small>{record.area}</small></strong>
-                <span>{record.start}<small>{record.endTime.slice(11, 16)} 结束</small></span>
-                <span>{record.duration}</span>
-                <span>{record.detail.currentPoint} / {record.detail.pointTotal}</span>
-                <span className={record.abnormalCount > 0 ? 'archive-danger' : 'archive-ok'}>{record.abnormalCount} 项</span>
-                <TaskStatus status={record.reviewState} />
-                <div className="row-actions">
-                  <button type="button" onClick={(event) => { event.stopPropagation(); onSelect(record.id) }}>详情</button>
-                  <button type="button" className="action-remote" onClick={(event) => { event.stopPropagation(); onReplay(record) }}>回放</button>
-                  <button type="button" onClick={(event) => { event.stopPropagation(); onReport(record) }}>报告</button>
-                </div>
+          <p>按任务执行实例归档真实路线、识别结果、图片证据和复核结论。</p>
+        </div>
+        <div className="archive-filter-grid">
+          <label className="archive-search">
+            <span>搜索</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="档案编号 / 任务 / 区域 / 路线"
+            />
+          </label>
+          <label><span>日期</span><select value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
+            <option value="all">全部时间</option>
+            <option value="today">今日</option>
+            <option value="7d">近 7 天</option>
+            <option value="30d">近 30 天</option>
+          </select></label>
+          <label><span>结论</span><select value={conclusion} onChange={(event) => setConclusion(event.target.value)}>
+            <option value="all">全部结论</option>
+            <option value="completed">已完成</option>
+            <option value="abnormal">存在异常</option>
+            <option value="interrupted">异常/中断</option>
+            <option value="pending">待复核</option>
+          </select></label>
+          <label><span>机器人</span><select value={robot} onChange={(event) => setRobot(event.target.value)}>
+            <option value="all">全部机器人</option>
+            {robots.map((item) => <option value={item} key={item}>{item}</option>)}
+          </select></label>
+          <label><span>排序</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+            <option value="newest">时间倒序</option>
+            <option value="oldest">时间正序</option>
+            <option value="abnormal">异常优先</option>
+          </select></label>
+          <div className="archive-toolbar-actions">
+            <button type="button" onClick={resetFilters}>重置</button>
+            <button type="button" onClick={onReload}>刷新</button>
+            <button type="button" className="primary" disabled={filteredRecords.length === 0} onClick={() => exportArchiveCsv(filteredRecords)}>导出 CSV</button>
+          </div>
+        </div>
+      </div>
+
+      {(loading || error) && (
+        <div className={`archive-data-state${error ? ' error' : ''}`}>
+          {error ? `后端档案读取失败，当前显示兜底数据：${error}` : '正在同步后端巡检档案…'}
+        </div>
+      )}
+
+      <div className="archive-master-detail">
+        <div className="archive-master-column">
+          <div className="archive-kpi-grid archive-kpi-compact">
+            {archiveStats.map((item) => (
+              <article key={item.label}>
+                <span>{item.label}</span>
+                <strong>{String(item.value).padStart(2, '0')}<em>{item.unit}</em></strong>
               </article>
             ))}
           </div>
+
+          <div className="archive-list-card">
+            <div className="archive-table archive-table-refined">
+              <div className="archive-table-row archive-table-head">
+                <span>档案 / 任务</span>
+                <span>巡检时间</span>
+                <span>路线与机器人</span>
+                <span>路线进度</span>
+                <span>异常 / 复核</span>
+                <span>结论</span>
+                <span>操作</span>
+              </div>
+              <div className="archive-table-body">
+                {pageRecords.length > 0 ? pageRecords.map((record) => (
+                  <article
+                    role="button"
+                    tabIndex={0}
+                    className={`archive-table-row${selectedArchive?.id === record.id ? ' selected' : ''}`}
+                    key={record.id}
+                    onClick={() => onSelect(record.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onSelect(record.id)
+                      }
+                    }}
+                  >
+                    <strong>{record.name}<small>{record.archiveNo}</small></strong>
+                    <span>{record.start.slice(0, 10)}<small>{record.start.slice(11, 16)} → {record.endTime === '--' ? '--:--' : record.endTime.slice(11, 16)} · {record.duration}</small></span>
+                    <span>{record.routeName}<small>{record.robot} · {record.area}</small></span>
+                    <span><b className="archive-progress-value">{record.detail.currentPoint}/{record.detail.pointTotal}</b><small>{record.progress}%</small></span>
+                    <span className={record.abnormalCount > 0 ? 'archive-danger' : 'archive-ok'}>{record.abnormalCount} 项<small>{record.reviewState}</small></span>
+                    <TaskStatus status={record.status} />
+                    <div className="archive-row-actions">
+                      <button
+                        type="button"
+                        disabled={!record.routePoints?.length}
+                        title={record.routePoints?.length ? '按历史路线进行3D回放' : '该档案未保存路线快照'}
+                        onClick={(event) => { event.stopPropagation(); onReplay(record) }}
+                      >
+                        3D回放
+                      </button>
+                      <button
+                        type="button"
+                        disabled={record.reviewState === '待复核'}
+                        title={record.reviewState === '待复核' ? '完成异常复核后才能生成报告' : '查看巡检报告'}
+                        onClick={(event) => { event.stopPropagation(); onReport(record) }}
+                      >
+                        报告
+                      </button>
+                    </div>
+                  </article>
+                )) : (
+                  <div className="archive-empty-state">
+                    <strong>没有符合条件的巡检档案</strong>
+                    <span>请调整日期、结论、机器人或搜索条件。</span>
+                    <button type="button" onClick={resetFilters}>清除筛选</button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <footer className="archive-pagination">
+              <span>共 {filteredRecords.length} 条，第 {safePage}/{totalPages} 页</span>
+              <div>
+                <button type="button" disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button>
+                <button type="button" disabled={safePage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>下一页</button>
+              </div>
+            </footer>
+          </div>
         </div>
 
-        {selectedArchive && (
-          <aside className="archive-trace-card">
-            <div className="archive-trace-head">
-              <span>PROCESS TRACE</span>
-              <strong>{selectedArchive.name}</strong>
-              <TaskStatus status={selectedArchive.status} />
-            </div>
-            <dl className="archive-trace-meta">
-              <div><dt>执行机器人</dt><dd>{selectedArchive.robot}</dd></div>
-              <div><dt>巡检区域</dt><dd>{selectedArchive.area}</dd></div>
-              <div><dt>巡检时间</dt><dd>{selectedArchive.start} - {selectedArchive.endTime.slice(11, 16)}</dd></div>
-              <div><dt>识别结果</dt><dd>{selectedArchive.resultCount} 项</dd></div>
-            </dl>
-            <div className="archive-mini-timeline">
-              {selectedArchive.timeline.map((item) => (
-                <article className={`timeline-${item.state}`} key={`${selectedArchive.id}-${item.time}-${item.type}`}>
-                  <time>{item.time}</time>
-                  <span>{item.type}</span>
-                  <strong>{item.label}</strong>
-                </article>
-              ))}
-            </div>
-            <div className="archive-trace-actions">
-              <button type="button" className="detail-button" onClick={() => onReplay(selectedArchive)}>3D过程回放</button>
-              <button type="button" onClick={() => onShowAi(selectedArchive)}>查看AI记录</button>
-            </div>
-          </aside>
-        )}
+        <aside className="archive-detail-card">
+          {selectedArchive ? (
+            <>
+              <header className="archive-detail-head">
+                <div>
+                  <span>{selectedArchive.archiveNo}</span>
+                  <strong>{selectedArchive.name}</strong>
+                  <small>{selectedArchive.area}</small>
+                </div>
+                <TaskStatus status={selectedArchive.reviewState} />
+              </header>
+              <nav className="archive-detail-tabs" aria-label="档案详情分类">
+                {detailTabs.map((tab) => (
+                  <button
+                    type="button"
+                    className={detailTab === tab.id ? 'active' : ''}
+                    onClick={() => setDetailTab(tab.id)}
+                    key={tab.id}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </nav>
+              <div className="archive-detail-body">
+                {detailTab === 'summary' && (
+                  <div className="archive-summary-view">
+                    <dl className="archive-summary-grid">
+                      <div><dt>任务结论</dt><dd><TaskStatus status={selectedArchive.status} /></dd></div>
+                      <div><dt>执行机器人</dt><dd>{selectedArchive.robot}</dd></div>
+                      <div><dt>实际开始</dt><dd>{selectedArchive.start}</dd></div>
+                      <div><dt>实际结束</dt><dd>{selectedArchive.endTime}</dd></div>
+                      <div><dt>实际用时</dt><dd>{selectedArchive.duration}</dd></div>
+                      <div><dt>路线进度</dt><dd>{selectedArchive.detail.currentPoint}/{selectedArchive.detail.pointTotal} · {selectedArchive.progress}%</dd></div>
+                      <div><dt>识别结果</dt><dd>{selectedArchive.resultCount} 项</dd></div>
+                      <div><dt>图片证据</dt><dd>{selectedImages.length} 张</dd></div>
+                      <div><dt>复核状态</dt><dd>{selectedArchive.reviewState}</dd></div>
+                      <div><dt>任务创建人</dt><dd>{selectedArchive.createdBy || '系统'}</dd></div>
+                    </dl>
+                    {selectedArchive.failureReason && (
+                      <div className="archive-failure-reason">
+                        <strong>中断/失败原因</strong>
+                        <span>{selectedArchive.failureReason}</span>
+                      </div>
+                    )}
+                    <div className="archive-history-list">
+                      <h3>真实过程事件</h3>
+                      {selectedArchive.timeline.map((item, index) => (
+                        <article className={`timeline-${item.state}`} key={`${selectedArchive.id}-${index}-${item.time}`}>
+                          <time>{item.time}</time>
+                          <span>{item.type}</span>
+                          <strong>{item.label}</strong>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {detailTab === 'route' && (
+                  <div className="archive-route-view">
+                    {selectedRoutePoints.length > 0 ? (
+                      <>
+                        <div className="archive-route-map">
+                          <PlanRoutePreview
+                            compact
+                            pointIds={selectedRoutePoints.map((point) => point.id)}
+                            routePoints={selectedRoutePoints}
+                            mapData={selectedMap}
+                            showRoute
+                          />
+                        </div>
+                        <div className="archive-point-sequence">
+                          {selectedRoutePoints.map((point, index) => {
+                            const reached = index < selectedArchive.detail.currentPoint
+                            return (
+                              <article className={reached ? 'reached' : 'pending'} key={point.id || index}>
+                                <span>{String(index + 1).padStart(2, '0')}</span>
+                                <div><strong>{point.targetName || point.name || `路线点 ${index + 1}`}</strong><small>x {point.x} / y {point.y}</small></div>
+                                <b>{reached ? '已到达' : '未到达'}</b>
+                              </article>
+                            )
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="archive-empty-state compact"><strong>未保存历史路线快照</strong><span>该档案创建时没有持久化路线点。</span></div>
+                    )}
+                  </div>
+                )}
+
+                {detailTab === 'results' && (
+                  <div className="archive-result-list">
+                    {selectedResults.length > 0 ? selectedResults.map((result, index) => (
+                      <article key={result.id || `${result.targetName}-${index}`}>
+                        <div>
+                          <span>{result.pointId || `P${String(index + 1).padStart(2, '0')}`}</span>
+                          <strong>{result.targetName || result.title}</strong>
+                          <small>{result.recognitionType} · {result.capturedAt || result.time}</small>
+                        </div>
+                        <dl>
+                          <div><dt>识别值</dt><dd>{result.value}</dd></div>
+                          <div><dt>标准范围</dt><dd>{result.standardRange || '未配置'}</dd></div>
+                          <div><dt>置信度</dt><dd>{result.confidence || '--'}</dd></div>
+                        </dl>
+                        <TaskStatus status={result.status || '正常'} />
+                      </article>
+                    )) : (
+                      <div className="archive-empty-state compact"><strong>暂无识别结果</strong><span>该执行实例未关联识别结果。</span></div>
+                    )}
+                  </div>
+                )}
+
+                {detailTab === 'evidence' && (
+                  <div className="archive-evidence-grid">
+                    {selectedImages.length > 0 ? selectedImages.map((image, index) => (
+                      <figure key={image.id || `${image.fileUrl}-${index}`}>
+                        <img src={image.fileUrl} alt={`${selectedArchive.name} 图片证据 ${index + 1}`} loading="lazy" />
+                        <figcaption>
+                          <strong>{image.pointId || `证据 ${index + 1}`}</strong>
+                          <span>{image.imageType || 'visible'} · {image.capturedAt || '--'}</span>
+                        </figcaption>
+                      </figure>
+                    )) : (
+                      <div className="archive-empty-state compact"><strong>暂无图片证据</strong><span>后端尚未为该档案保存原始图片。</span></div>
+                    )}
+                  </div>
+                )}
+
+                {detailTab === 'review' && (
+                  <div className="archive-review-list">
+                    {abnormalResults.length > 0 ? abnormalResults.map((result, index) => (
+                      <article key={result.id || `${result.targetName}-${index}`}>
+                        <header><strong>{result.targetName}</strong><TaskStatus status={result.reviewStatus || '待复核'} /></header>
+                        <dl>
+                          <div><dt>异常结果</dt><dd>{result.value}</dd></div>
+                          <div><dt>识别时间</dt><dd>{result.capturedAt || '--'}</dd></div>
+                          <div><dt>复核人员</dt><dd>{result.reviewedBy || '未复核'}</dd></div>
+                          <div><dt>复核时间</dt><dd>{result.reviewedAt || '--'}</dd></div>
+                        </dl>
+                        <p>{result.reviewRemark || '暂无复核备注'}</p>
+                      </article>
+                    )) : (
+                      <div className="archive-empty-state compact"><strong>无需异常复核</strong><span>该档案没有异常或告警识别结果。</span></div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <footer className="archive-detail-actions">
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={!selectedArchive.routePoints?.length}
+                  title={selectedArchive.routePoints?.length ? '按历史路线进行3D回放' : '该档案未保存路线快照'}
+                  onClick={() => onReplay(selectedArchive)}
+                >
+                  3D过程回放
+                </button>
+                <button type="button" disabled={selectedResults.length === 0} onClick={() => onShowAi(selectedArchive)}>查看全部AI记录</button>
+                <button type="button" disabled={selectedArchive.reviewState === '待复核'} onClick={() => onReport(selectedArchive)}>查看巡检报告</button>
+              </footer>
+            </>
+          ) : (
+            <div className="archive-empty-state"><strong>请选择巡检档案</strong><span>选中左侧记录后查看完整执行详情。</span></div>
+          )}
+        </aside>
       </div>
     </section>
   )
 }
 
-function AiReviewView({ aiRecords, selectedTask, onSelectTask, onReview, onReplay }) {
-  const selectedRecords = aiRecords.filter((record) => record.taskId === selectedTask.id)
+function AiReviewView({ aiRecords, selectedTaskId, onSelectTask, onReview, onReplay }) {
+  const selectedRecords = aiRecords.filter((record) => record.taskId === selectedTaskId)
   const focusedRecord = selectedRecords[0] || aiRecords[0]
   const aiStats = [
     { label: '识别记录', value: aiRecords.length, unit: '项' },
@@ -733,7 +1349,7 @@ function AiReviewView({ aiRecords, selectedTask, onSelectTask, onReview, onRepla
               <article
                 role="button"
                 tabIndex={0}
-                className={`ai-record-row${selectedTask.id === record.taskId ? ' selected' : ''}`}
+                className={`ai-record-row${selectedTaskId === record.taskId ? ' selected' : ''}`}
                 key={record.id}
                 onClick={() => onSelectTask(record.taskId)}
                 onKeyDown={(event) => {
@@ -789,8 +1405,8 @@ function AiReviewView({ aiRecords, selectedTask, onSelectTask, onReview, onRepla
   )
 }
 
-function ReportCenterView({ reportRecords, selectedTask, onSelect, onPreview, onReplay }) {
-  const selectedReport = reportRecords.find((record) => record.id === selectedTask.id) || reportRecords[0]
+function ReportCenterView({ reportRecords, selectedReportId, onSelect, onPreview, onReplay }) {
+  const selectedReport = reportRecords.find((record) => record.id === selectedReportId) || reportRecords[0]
   const reportStats = [
     { label: '报告档案', value: reportRecords.length, unit: '项' },
     { label: '已生成', value: reportRecords.filter((record) => record.reportStatus === '已生成').length, unit: '项' },
@@ -892,8 +1508,10 @@ function ReportCenterView({ reportRecords, selectedTask, onSelect, onPreview, on
 
 function PlanRoutePreview({
   pointIds = [],
-  routePoints = [],
+  routePoints = null,
   mapData = hanlinRoomMap,
+  vehiclePose = null,
+  compact = false,
   selectable = false,
   onTogglePoint,
   onAddFreePoint,
@@ -910,7 +1528,7 @@ function PlanRoutePreview({
     mapData.size.width + mapPadding * 2,
     mapData.size.height + mapPadding * 2,
   ].join(' ')
-  const selectedRoutePoints = routePoints.length
+  const selectedRoutePoints = Array.isArray(routePoints)
     ? routePoints
     : pointIds
       .map((pointId) => mapPointById[pointId])
@@ -1104,8 +1722,29 @@ function PlanRoutePreview({
           </g>
         )
       })}
+      {vehiclePose?.modelPoint && (
+        <g
+          className="map-live-vehicle"
+          transform={`translate(${vehiclePose.modelPoint.x} ${vehiclePose.modelPoint.y}) rotate(${-vehiclePose.yaw * 180 / Math.PI})`}
+        >
+          <circle r={headingLength * 0.32} />
+          <path
+            d={[
+              `M ${headingLength * 0.58} 0`,
+              `L ${-headingLength * 0.28} ${headingLength * 0.3}`,
+              `L ${-headingLength * 0.12} 0`,
+              `L ${-headingLength * 0.28} ${-headingLength * 0.3}`,
+              'Z',
+            ].join(' ')}
+          />
+        </g>
+      )}
     </svg>
   )
+
+  if (compact) {
+    return <div className="route-preview task-mini-route-preview"><div className="route-map-canvas">{mapSvg}</div></div>
+  }
 
   return (
     <div className="route-preview">
@@ -1132,6 +1771,12 @@ function PlanRoutePreview({
 
 function ClusterControl() {
   const navigate = useNavigate()
+  const {
+    business,
+    loading: archiveLoading,
+    error: archiveError,
+    reload: reloadArchive,
+  } = useBusinessOverview({ pollMs: 10000 })
   const [activeTab, setActiveTab] = useState('plan')
   const [taskList, setTaskList] = useState(initialTasks)
   const [selectedTaskId, setSelectedTaskId] = useState(initialTasks[0].id)
@@ -1141,7 +1786,34 @@ function ClusterControl() {
   const [planStep, setPlanStep] = useState(1)
   const [showSlamMap, setShowSlamMap] = useState(false)
   const [storedResults, setStoredResults] = useState(() => getInspectionResults())
+  const [taskMonitorTelemetry, setTaskMonitorTelemetry] = useState(null)
+  const [taskCameraAvailable, setTaskCameraAvailable] = useState(true)
+  const [taskCameraRetryNonce, setTaskCameraRetryNonce] = useState(0)
   const activePlanMap = getSceneMap(planForm.sceneId)
+  const activePlanRoutePoints = getPlanRoutePoints(planForm)
+
+  useEffect(() => {
+    if (
+      planForm.sceneId !== 'lab-building'
+      || (planForm.routePoints?.length || 0) > 0
+      || (planForm.selectedPointIds?.length || 0) === 0
+    ) {
+      return
+    }
+
+    // 兼容热更新前已经打开的表单：旧状态只有 selectedPointIds，
+    // 左侧会显示预设点，但右侧 routePoints 仍为空。
+    const presetRoutePoints = getPresetPlanRoutePoints('lab-building')
+    const presetPointIds = new Set(presetRoutePoints.map((point) => point.id))
+    if (!planForm.selectedPointIds.every((pointId) => presetPointIds.has(pointId))) {
+      return
+    }
+
+    setPlanForm((currentForm) => ({
+      ...currentForm,
+      routePoints: presetRoutePoints.filter((point) => currentForm.selectedPointIds.includes(point.id)),
+    }))
+  }, [planForm.routePoints, planForm.sceneId, planForm.selectedPointIds])
 
   useEffect(() => {
     let cancelled = false
@@ -1182,20 +1854,41 @@ function ClusterControl() {
   const aiPreviewItems = selectedTaskResults.length > 0
     ? selectedTaskResults.map(mapStoredResultToPreview)
     : selectedTask.aiPreview
-  const archiveRecords = useMemo(() => (
+  const demoArchiveRecords = useMemo(() => (
     taskList
       .filter((task) => ['已完成', '异常', '待审核'].includes(task.status))
       .map((task) => buildArchiveRecord(task, storedResults))
   ), [taskList, storedResults])
-  const aiRecords = useMemo(() => buildAiRecords(taskList, storedResults), [taskList, storedResults])
+  const businessArchiveRecords = useMemo(
+    () => buildBusinessArchiveRecords(business, taskList),
+    [business, taskList],
+  )
+  const archiveRecords = businessArchiveRecords.length > 0 ? businessArchiveRecords : demoArchiveRecords
+  const archiveAiRecords = useMemo(() => buildArchiveAiRecords(archiveRecords), [archiveRecords])
+  const demoAiRecords = useMemo(() => buildAiRecords(taskList, storedResults), [taskList, storedResults])
+  const aiRecords = archiveAiRecords.length > 0 ? archiveAiRecords : demoAiRecords
   const reportRecords = useMemo(() => buildReportRecords(archiveRecords), [archiveRecords])
   const selectedArchiveRecord = useMemo(() => (
-    archiveRecords.find((record) => record.id === selectedTask.id)
-  ), [archiveRecords, selectedTask.id])
+    archiveRecords.find((record) => record.id === selectedTaskId)
+  ), [archiveRecords, selectedTaskId])
   const contextTask = activeTab === 'records' && selectedArchiveRecord ? selectedArchiveRecord : selectedTask
+  const isContextTaskRunning = contextTask.status === '执行中'
   const contextAiItems = activeTab === 'records' && selectedArchiveRecord
-    ? (selectedTaskResults.length > 0 ? selectedTaskResults.map(mapStoredResultToPreview) : selectedArchiveRecord.aiPreview)
+    ? (selectedArchiveRecord.recognitionResults?.length ? selectedArchiveRecord.recognitionResults : selectedArchiveRecord.aiPreview)
     : aiPreviewItems
+  const contextMonitor = useMemo(
+    () => loadPatrolMonitorContext({ taskId: contextTask.id }),
+    [contextTask.id],
+  )
+  const contextSceneMap = getSceneMap(contextTask.sceneId || contextMonitor?.sceneId || 'lab-building')
+  const contextRoutePoints = useMemo(() => {
+    if (contextTask.routePoints?.length) return contextTask.routePoints
+    if (contextMonitor?.routePoints?.length) return contextMonitor.routePoints
+    if (contextTask.pointIds?.length) {
+      return contextTask.pointIds.map((pointId) => allInspectionPointById[pointId]).filter(Boolean)
+    }
+    return contextSceneMap.inspectionPoints.slice(0, contextTask.detail?.pointTotal || contextSceneMap.inspectionPoints.length)
+  }, [contextMonitor, contextSceneMap, contextTask.detail?.pointTotal, contextTask.pointIds, contextTask.routePoints])
   const contextPanel = useMemo(() => {
     if (activeTab === 'records') {
       return {
@@ -1205,7 +1898,6 @@ function ClusterControl() {
         aiTitle: '归档识别结果',
         primaryAction: '3D过程回放',
         moreAction: '查看AI记录',
-        actionTitle: '档案操作',
       }
     }
 
@@ -1217,7 +1909,6 @@ function ClusterControl() {
         aiTitle: 'AI识别复核队列',
         primaryAction: '查看异常详情',
         moreAction: '查看复核结果',
-        actionTitle: '复核操作',
       }
     }
 
@@ -1229,7 +1920,6 @@ function ClusterControl() {
         aiTitle: '报告识别摘要',
         primaryAction: '生成报告',
         moreAction: '查看报告记录',
-        actionTitle: '报告操作',
       }
     }
 
@@ -1240,11 +1930,122 @@ function ClusterControl() {
       aiTitle: 'AI识别结果预览',
       primaryAction: '实时监控',
       moreAction: '查看更多',
-      actionTitle: '快捷模板',
     }
   }, [activeTab])
 
   useEffect(() => subscribeInspectionResults(setStoredResults), [])
+
+  useEffect(() => {
+    let cancelled = false
+    let requestInFlight = false
+    const vehicleId = contextTask.robot || 'nano1'
+    const executionId = contextMonitor?.executionId
+
+    setTaskMonitorTelemetry(null)
+    if (!isContextTaskRunning) return undefined
+
+    const loadTaskMonitor = async () => {
+      if (requestInFlight) return
+      requestInFlight = true
+      try {
+        const response = await fetch(`/api/vehicle/status?vehicle_id=${encodeURIComponent(vehicleId)}`, {
+          credentials: 'include',
+        })
+        const status = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(status.detail || `车辆状态请求失败（${response.status}）`)
+
+        let navigation = status.navigation || null
+        const activeExecutionId = executionId || navigation?.execution_id
+        if (activeExecutionId) {
+          const routeResponse = await fetch(
+            `/api/vehicle/navigation-route/status?vehicle_id=${encodeURIComponent(vehicleId)}&execution_id=${encodeURIComponent(activeExecutionId)}`,
+            { credentials: 'include' },
+          )
+          const routeStatus = await routeResponse.json().catch(() => ({}))
+          if (routeResponse.ok) navigation = routeStatus.navigation || routeStatus
+        }
+        if (cancelled) return
+
+        const pose = status.localization?.valid === false ? null : readVehiclePose(status, contextSceneMap)
+        setTaskMonitorTelemetry({
+          connected: Boolean(status.online),
+          status,
+          navigation,
+          pose,
+          updatedAt: Date.now(),
+          error: null,
+        })
+
+        if (navigation) {
+          const routeTotal = Number(navigation.route_total || 0)
+          const reachedCount = Number(navigation.reached_count || 0)
+          const progress = routeTotal > 0 ? Math.round(Math.min(1, reachedCount / routeTotal) * 100) : 0
+          const terminalStatus = navigation.state === 'completed'
+            ? '已完成'
+            : navigation.state === 'failed'
+              ? '异常'
+              : navigation.state === 'cancelled'
+                ? '待审核'
+                : null
+
+          setTaskList((currentTasks) => currentTasks.map((task) => {
+            if (task.id !== contextTask.id) return task
+            const nextStatus = terminalStatus || task.status
+            const nextProgress = terminalStatus === '已完成' ? 100 : Math.max(task.progress || 0, progress)
+            const nextCurrentPoint = Math.max(task.detail?.currentPoint || 0, reachedCount)
+            if (
+              nextStatus === task.status
+              && nextProgress === task.progress
+              && nextCurrentPoint === task.detail?.currentPoint
+            ) {
+              return task
+            }
+            return {
+              ...task,
+              status: nextStatus,
+              progress: nextProgress,
+              detail: {
+                ...task.detail,
+                pointTotal: routeTotal || task.detail?.pointTotal || 0,
+                currentPoint: nextCurrentPoint,
+              },
+            }
+          }))
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTaskMonitorTelemetry((current) => ({
+            ...(current || {}),
+            connected: false,
+            error: error.message,
+          }))
+        }
+      } finally {
+        requestInFlight = false
+      }
+    }
+
+    loadTaskMonitor()
+    const timer = window.setInterval(loadTaskMonitor, 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [contextMonitor?.executionId, contextSceneMap, contextTask.id, contextTask.robot, isContextTaskRunning])
+
+  useEffect(() => {
+    setTaskCameraAvailable(true)
+    setTaskCameraRetryNonce((value) => value + 1)
+  }, [contextTask.robot, isContextTaskRunning])
+
+  useEffect(() => {
+    if (!isContextTaskRunning || taskCameraAvailable) return undefined
+    const timer = window.setTimeout(() => {
+      setTaskCameraRetryNonce((value) => value + 1)
+      setTaskCameraAvailable(true)
+    }, 3000)
+    return () => window.clearTimeout(timer)
+  }, [isContextTaskRunning, taskCameraAvailable])
 
   useEffect(() => {
     if (activeTab !== 'records' || archiveRecords.length === 0) {
@@ -1326,6 +2127,7 @@ function ClusterControl() {
   const changePlanScene = (sceneId) => {
     const mapData = getSceneMap(sceneId)
     const isLabScene = sceneId === 'lab-building'
+    const presetRoutePoints = isLabScene ? getPresetPlanRoutePoints(sceneId) : []
 
     setPlanForm((currentForm) => ({
       ...currentForm,
@@ -1334,8 +2136,10 @@ function ClusterControl() {
       areaId: wholeRoomScope.id,
       area: isLabScene ? `${mapData.name} / 环形走廊` : `${mapData.name} / 整房巡检`,
       name: isLabScene ? `${mapData.name}环廊巡检任务` : `${mapData.name}整房巡检任务`,
-      selectedPointIds: getNavigablePointIds(sceneId),
-      routePoints: [],
+      selectedPointIds: isLabScene
+        ? presetRoutePoints.map((point) => point.id)
+        : getNavigablePointIds(sceneId),
+      routePoints: presetRoutePoints,
       pointDirections: {},
     }))
   }
@@ -1384,6 +2188,7 @@ function ClusterControl() {
 
       return {
         ...currentForm,
+        selectedPointIds: [...(currentForm.selectedPointIds || []), point.id],
         routePoints: [...(currentForm.routePoints || []), point],
       }
     })
@@ -1392,7 +2197,17 @@ function ClusterControl() {
   const removeFreeRoutePoint = (pointId) => {
     setPlanForm((currentForm) => ({
       ...currentForm,
+      selectedPointIds: (currentForm.selectedPointIds || []).filter((item) => item !== pointId),
       routePoints: (currentForm.routePoints || []).filter((point) => point.id !== pointId),
+    }))
+  }
+
+  const clearPlanRoute = () => {
+    setPlanForm((currentForm) => ({
+      ...currentForm,
+      selectedPointIds: [],
+      routePoints: [],
+      pointDirections: {},
     }))
   }
 
@@ -1423,7 +2238,11 @@ function ClusterControl() {
 
       const [point] = routePoints.splice(index, 1)
       routePoints.splice(nextIndex, 0, point)
-      return { ...currentForm, routePoints }
+      return {
+        ...currentForm,
+        selectedPointIds: routePoints.map((item) => item.id),
+        routePoints,
+      }
     })
   }
 
@@ -1437,9 +2256,7 @@ function ClusterControl() {
 
   const handleCreatePlan = async (event) => {
     event.preventDefault()
-    const selectedCount = planForm.sceneId === 'lab-building'
-      ? (planForm.routePoints?.length || 0)
-      : planForm.selectedPointIds.length
+    const selectedCount = activePlanRoutePoints.length
     if (selectedCount === 0) {
       setActionNotice('请至少选择 1 个巡检点后再创建任务。')
       setPlanStep(2)
@@ -1586,9 +2403,13 @@ function ClusterControl() {
 
   const openPatrolReplay = (task) => {
     setSelectedTaskId(task.id)
-    navigate(buildPatrolMonitorUrl({ taskId: task.id, vehicleId: task.robot, replayMode: true }), {
+    const replayTaskId = task.taskId || task.id
+    navigate(buildPatrolMonitorUrl({ taskId: replayTaskId, vehicleId: task.robot, replayMode: true }), {
       state: {
-        taskId: task.id,
+        taskId: replayTaskId,
+        archiveId: task.id,
+        recordId: task.recordId,
+        archiveNo: task.archiveNo,
         taskName: task.name,
         sceneId: task.sceneId,
         robot: task.robot,
@@ -1619,9 +2440,9 @@ function ClusterControl() {
   }
 
   const showArchiveAiRecords = (task) => {
-    setSelectedTaskId(task.id)
+    setSelectedTaskId(task.taskId || task.id)
     setActiveTab('ai')
-    setActionNotice(`${task.name} 的历、AI 识别记录已聚焦。`)
+    setActionNotice(`${task.name} 的历史 AI 识别记录已聚焦。`)
   }
 
   const showArchiveReport = (task) => {
@@ -1635,8 +2456,29 @@ function ClusterControl() {
     openPatrolReplay(task)
   }
 
-  const handleAiReview = (record, reviewStatus) => {
+  const handleAiReview = async (record, reviewStatus) => {
     setSelectedTaskId(record.taskId)
+
+    if (record.source === 'business') {
+      try {
+        const response = await fetch(`/api/recognition/results/${encodeURIComponent(record.id)}/review`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            review_status: reviewStatus,
+            review_remark: reviewStatus === '确认异常' ? '人工复核确认异常' : '人工复核标记误报',
+          }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.detail || '复核结果保存失败')
+        await reloadArchive(true)
+        setActionNotice(`${record.targetName} 已保存后端复核结论：${reviewStatus}。`)
+      } catch (error) {
+        setActionNotice(`${record.targetName} 复核失败：${error.message}`)
+      }
+      return
+    }
 
     if (record.source === 'stored') {
       setStoredResults(updateInspectionResultReview(record.id, reviewStatus))
@@ -1685,8 +2527,29 @@ function ClusterControl() {
     setActionNotice(`${contextTask.name} 、AI 识别结果已聚焦。`)
   }
 
+  const rawMonitorNavigation = taskMonitorTelemetry?.navigation
+  const monitorNavigation = (
+    !rawMonitorNavigation?.task_id
+    || rawMonitorNavigation.task_id === contextTask.id
+    || rawMonitorNavigation.execution_id === contextMonitor?.executionId
+  ) ? rawMonitorNavigation : null
+  const monitorRouteTotal = Number(monitorNavigation?.route_total || contextTask.detail?.pointTotal || contextRoutePoints.length || 0)
+  const monitorReachedCount = Number(monitorNavigation?.reached_count ?? contextTask.detail?.currentPoint ?? 0)
+  const monitorRouteIndex = Math.max(0, Number(monitorNavigation?.route_index || monitorReachedCount || 1) - 1)
+  const monitorCurrentPoint = contextRoutePoints[monitorRouteIndex]
+  const monitorProgress = monitorNavigation && monitorRouteTotal > 0
+    ? Math.round(Math.min(1, monitorReachedCount / monitorRouteTotal) * 100)
+    : contextTask.progress
+  const monitorStateLabel = taskMonitorTelemetry?.connected
+    ? LIVE_NAVIGATION_LABELS[monitorNavigation?.state] || '车辆在线'
+    : '车辆离线'
+  const detailMonitorStateLabel = isContextTaskRunning ? monitorStateLabel : contextTask.status
+  const monitorPositionLabel = taskMonitorTelemetry?.pose
+    ? `map (${taskMonitorTelemetry.pose.x.toFixed(2)}, ${taskMonitorTelemetry.pose.y.toFixed(2)})`
+    : '等待有效 map 位姿'
+
   return (
-    <section className="task-console-page">
+    <section className={`task-console-page${activeTab === 'records' ? ' records-task-page' : ''}`}>
       <header className="task-hero">
         <div className="task-hero-copy">
           <span className="task-kicker">PATROL TASK CENTER</span>
@@ -1724,23 +2587,26 @@ function ClusterControl() {
       </nav>
 
       {activeTab === 'routes' ? <RouteManagementPanel /> : <>
-      <div className="task-workbench">
+      <div className={`task-workbench${activeTab === 'records' ? ' records-workbench' : ''}`}>
         <main className="task-left-zone">
           {activeTab === 'records' && (
             <PatrolArchiveView
               archiveRecords={archiveRecords}
-              selectedTask={selectedTask}
+              selectedArchiveId={selectedTaskId}
               onSelect={setSelectedTaskId}
               onReplay={openPatrolReplay}
               onShowAi={showArchiveAiRecords}
               onReport={showArchiveReport}
+              loading={archiveLoading}
+              error={archiveError}
+              onReload={() => reloadArchive()}
             />
           )}
 
           {activeTab === 'ai' && (
             <AiReviewView
               aiRecords={aiRecords}
-              selectedTask={selectedTask}
+              selectedTaskId={selectedTaskId}
               onSelectTask={setSelectedTaskId}
               onReview={handleAiReview}
               onReplay={openReplayByTaskId}
@@ -1750,7 +2616,7 @@ function ClusterControl() {
           {activeTab === 'report' && (
             <ReportCenterView
               reportRecords={reportRecords}
-              selectedTask={selectedTask}
+              selectedReportId={selectedTaskId}
               onSelect={setSelectedTaskId}
               onPreview={handleReportPreview}
               onReplay={openPatrolReplay}
@@ -1832,84 +2698,131 @@ function ClusterControl() {
           )}
         </main>
 
-        <aside className="task-side-zone">
+        {activeTab !== 'records' && <aside className="task-side-zone task-side-zone-single">
           <section className="console-panel current-task-panel">
-            <div className="panel-heading compact"><h2>{contextPanel.detailTitle}</h2></div>
-            <div className="current-task-card">
-              <div className="task-robot-photo">
-                <span className="robot-lens" />
-                <span className="robot-body" />
-                <span className="robot-base" />
-              </div>
-              <div className="current-task-copy">
-                <div className="task-title-line">
-                  <strong>{contextTask.name}</strong>
-                  <TaskStatus status={activeTab === 'records' && contextTask.reviewState ? contextTask.reviewState : contextTask.status} />
-                </div>
-                <dl>
-                  <div><dt>执行机器人</dt><dd>{contextTask.robot}</dd></div>
-                  <div><dt>{activeTab === 'records' ? '归档编号' : '巡检点总数'}</dt><dd>{activeTab === 'records' ? contextTask.archiveNo : `${contextTask.detail.pointTotal} 个`}</dd></div>
-                  <div><dt>{activeTab === 'records' ? '完成点位' : '当前巡检点'}</dt><dd>{contextTask.detail.currentPoint} / {contextTask.detail.pointTotal}</dd></div>
-                  <div><dt>异常数量</dt><dd>{contextTask.abnormalCount ?? contextTask.detail.abnormalCount} 项</dd></div>
-                  <div><dt>{activeTab === 'records' ? '结束时间' : '预计完成时间'}</dt><dd>{activeTab === 'records' ? contextTask.endTime?.slice(11, 16) : contextTask.detail.eta}</dd></div>
-                </dl>
-              </div>
+            <div className="panel-heading compact task-detail-heading">
+              <h2>{contextPanel.detailTitle}</h2>
+              <span className={`task-live-badge ${isContextTaskRunning ? (taskMonitorTelemetry?.connected ? 'online' : 'offline') : 'standby'}`}>
+                <i />{detailMonitorStateLabel}
+              </span>
             </div>
+
+            <div className="task-detail-overview">
+              <div className="task-title-line">
+                <div>
+                  <small>{contextTask.area}</small>
+                  <strong>{contextTask.name}</strong>
+                </div>
+                <TaskStatus status={activeTab === 'records' && contextTask.reviewState ? contextTask.reviewState : contextTask.status} />
+              </div>
+              <dl className="task-detail-metrics">
+                <div><dt>执行机器人</dt><dd>{contextTask.robot}</dd></div>
+                <div><dt>{activeTab === 'records' ? '归档编号' : '巡检点总数'}</dt><dd>{activeTab === 'records' ? contextTask.archiveNo : `${monitorRouteTotal} 个`}</dd></div>
+                <div><dt>{activeTab === 'records' ? '完成点位' : '当前巡检点'}</dt><dd>{monitorReachedCount} / {monitorRouteTotal}</dd></div>
+                <div><dt>异常数量</dt><dd>{contextTask.abnormalCount ?? contextTask.detail.abnormalCount} 项</dd></div>
+                <div><dt>{activeTab === 'records' ? '结束时间' : '预计完成时间'}</dt><dd>{activeTab === 'records' ? contextTask.endTime?.slice(11, 16) : contextTask.detail.eta}</dd></div>
+                <div><dt>当前位置</dt><dd title={monitorPositionLabel}>{monitorCurrentPoint?.targetName || monitorPositionLabel}</dd></div>
+              </dl>
+            </div>
+
+            <div className="task-live-windows">
+              <article className="task-live-window task-camera-window">
+                <header>
+                  <div><span>CAMERA</span><strong>车载摄像头</strong></div>
+                  <b className={isContextTaskRunning && taskCameraAvailable ? 'online' : 'offline'}>
+                    {isContextTaskRunning ? (taskCameraAvailable ? 'LIVE' : 'RETRY') : 'STANDBY'}
+                  </b>
+                </header>
+                <div className="task-camera-frame">
+                  {!isContextTaskRunning ? (
+                    <div className="task-live-placeholder">
+                      <i>CAM</i>
+                      <strong>任务未在执行</strong>
+                      <span>开始巡检后显示车载实时视频</span>
+                    </div>
+                  ) : taskCameraAvailable ? (
+                    <img
+                      src={`/api/vehicle/camera/stream?vehicle_id=${encodeURIComponent(contextTask.robot || 'nano1')}&camera_role=movement&retry=${taskCameraRetryNonce}`}
+                      alt={`${contextTask.robot || 'nano1'} 车载实时视频`}
+                      draggable="false"
+                      onLoad={() => setTaskCameraAvailable(true)}
+                      onError={() => setTaskCameraAvailable(false)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTaskCameraRetryNonce((value) => value + 1)
+                        setTaskCameraAvailable(true)
+                      }}
+                    >
+                      视频暂不可用<br />点击重试
+                    </button>
+                  )}
+                  {isContextTaskRunning && <i className="camera-scan-line" />}
+                </div>
+              </article>
+
+              <article className="task-live-window task-map-window">
+                <header>
+                  <div><span>MAP POSE</span><strong>小车实时监控</strong></div>
+                  <b className={isContextTaskRunning && taskMonitorTelemetry?.pose ? 'online' : 'offline'}>
+                    {isContextTaskRunning ? (taskMonitorTelemetry?.pose ? 'LOC' : 'WAIT') : 'STANDBY'}
+                  </b>
+                </header>
+                <div className="task-mini-map">
+                  {isContextTaskRunning ? (
+                    <>
+                      <PlanRoutePreview
+                        compact
+                        pointIds={contextRoutePoints.map((point) => point.id)}
+                        routePoints={contextRoutePoints}
+                        mapData={contextSceneMap}
+                        vehiclePose={taskMonitorTelemetry?.pose}
+                        showRoute
+                      />
+                      <span>{monitorPositionLabel}</span>
+                    </>
+                  ) : (
+                    <div className="task-live-placeholder">
+                      <i>3D</i>
+                      <strong>任务未在执行</strong>
+                      <span>开始巡检后显示小车实时位置</span>
+                    </div>
+                  )}
+                </div>
+              </article>
+            </div>
+
             <div className="side-progress">
               <span>{contextPanel.progressLabel}</span>
-              <i><b style={{ width: `${contextTask.progress}%` }} /></i>
-              <strong>{contextTask.progress}%</strong>
+              <i><b style={{ width: `${monitorProgress}%` }} /></i>
+              <strong>{monitorProgress}%</strong>
             </div>
-            <button
-              type="button"
-              className="detail-button"
-              onClick={handleContextPrimaryAction}
-            >
-              {contextPanel.primaryAction}
-            </button>
+            <div className="task-detail-footer">
+              <span>
+                {!isContextTaskRunning
+                  ? `当前状态：${contextTask.status}，实时数据未连接`
+                  : taskMonitorTelemetry?.error
+                  ? taskMonitorTelemetry.error
+                  : taskMonitorTelemetry?.updatedAt
+                  ? `数据更新 ${new Date(taskMonitorTelemetry.updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}`
+                  : '正在连接车辆数据'}
+              </span>
+              <button
+                type="button"
+                className="detail-button"
+                onClick={handleContextPrimaryAction}
+                disabled={activeTab === 'plan' && !isContextTaskRunning}
+              >
+                {contextPanel.primaryAction}
+              </button>
+            </div>
           </section>
-
-          <section className="console-panel template-panel">
-            <div className="panel-heading compact"><h2>{contextPanel.actionTitle}</h2></div>
-            {activeTab === 'plan' ? (
-              <div className="template-list">
-                {routeTemplates.map((template) => (
-                  <article className="template-item" key={template.name}>
-                    <span></span>
-                    <div><strong>{template.name}</strong><small>{template.meta}</small></div>
-                    <button type="button" onClick={() => openPlanModal(template)}>使用</button>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <div className="template-list">
-                <article className="template-item">
-                  <span>3D</span>
-                  <div><strong>{activeTab === 'records' ? '过程回放' : '关联过程'}</strong><small>{contextTask.name}</small></div>
-                  <button
-                    type="button"
-                    onClick={() => (activeTab === 'records' ? openPatrolReplay(contextTask) : openLivePatrolMonitor(contextTask))}
-                  >
-                    {activeTab === 'records' ? '回放' : '监控'}
-                  </button>
-                </article>
-                <article className="template-item">
-                  <span>AI</span>
-                  <div><strong>{activeTab === 'ai' ? '复核结果' : '识别记录'}</strong><small>{contextAiItems.length} 条识别结果</small></div>
-                  <button type="button" onClick={handleContextMoreAction}>查看</button>
-                </article>
-                <article className="template-item">
-                  <span>RP</span>
-                  <div><strong>报告归档</strong><small>{contextTask.status === '已完成' ? '可生成报告' : '等待闭环'}</small></div>
-                  <button type="button" onClick={() => showArchiveReport(contextTask)}>报告</button>
-                </article>
-              </div>
-            )}
-          </section>
-        </aside>
+        </aside>}
       </div>
 
-      <div className="task-bottom-zone">
+      {activeTab !== 'records' && <div className="task-bottom-zone">
         <section className="console-panel timeline-panel">
           <div className="panel-heading compact"><h2>{contextPanel.timelineTitle}</h2></div>
           <div className="execution-timeline">
@@ -1945,7 +2858,7 @@ function ClusterControl() {
             ))}
           </div>
         </section>
-      </div>
+      </div>}
       </>}
 
       {isPlanModalOpen && (
@@ -2076,8 +2989,8 @@ function ClusterControl() {
               {planStep === 2 && (
                 <div className="plan-step-panel route-compose-step">
                   <PlanRoutePreview
-                    pointIds={planForm.selectedPointIds}
-                    routePoints={getPlanRoutePoints(planForm)}
+                    pointIds={activePlanRoutePoints.map((point) => point.id)}
+                    routePoints={activePlanRoutePoints}
                     mapData={activePlanMap}
                     selectable
                     onTogglePoint={togglePlanPoint}
@@ -2090,21 +3003,22 @@ function ClusterControl() {
                       <div className="route-order-head">
                         <div>
                           <strong>路线顺序</strong>
-                          <span>{planForm.sceneId === 'lab-building' ? (planForm.routePoints?.length || 0) : planForm.selectedPointIds.length} 个已选点</span>
+                          <span>{activePlanRoutePoints.length} 个已选点</span>
                         </div>
                         <button type="button" onClick={reversePlanRoute}>反向执行</button>
                       </div>
                       <div className="route-order-list">
-                        {(planForm.sceneId === 'lab-building' ? (planForm.routePoints || []) : planForm.selectedPointIds).map((item, index) => {
-                          const point = planForm.sceneId === 'lab-building' ? item : allInspectionPointById[item]
+                        {activePlanRoutePoints.map((point, index) => {
                           const pointId = point.id
                           const arrivalDirection = getPlanPointDirection(point, planForm.pointDirections)
 
                           return (
                             <article key={pointId}>
                               <span>{String(index + 1).padStart(2, '0')}</span>
-                              <strong>{point.targetName}</strong>
-                              <small>{planForm.sceneId === 'lab-building' ? `x ${point.x} / y ${point.y}` : point.name}</small>
+                              <div className="route-point-copy">
+                                <strong>{point.targetName}</strong>
+                                <small>{planForm.sceneId === 'lab-building' ? `x ${point.x} / y ${point.y}` : point.name}</small>
+                              </div>
                               <label className="route-direction-control">
                                 <span>到点朝向</span>
                                 <select
@@ -2118,8 +3032,20 @@ function ClusterControl() {
                                 </select>
                               </label>
                               <div className="route-order-actions">
-                                <button type="button" onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, -1) : movePlanPoint(pointId, -1))}>上移</button>
-                                <button type="button" onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, 1) : movePlanPoint(pointId, 1))}>下移</button>
+                                <button
+                                  type="button"
+                                  disabled={index === 0}
+                                  onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, -1) : movePlanPoint(pointId, -1))}
+                                >
+                                  上移
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={index === activePlanRoutePoints.length - 1}
+                                  onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, 1) : movePlanPoint(pointId, 1))}
+                                >
+                                  下移
+                                </button>
                                 <button
                                   type="button"
                                   className="route-delete-button"
@@ -2139,7 +3065,7 @@ function ClusterControl() {
                     </div>
 
                     {planForm.sceneId !== 'lab-building' ? (
-                    <div className="fixed-point-panel">
+                    <div className="fixed-point-panel free-point-panel">
                       <div className="fixed-point-head">
                         <strong>固定点位</strong>
                         <span>点击点位可加入或移出路线</span>
@@ -2172,13 +3098,13 @@ function ClusterControl() {
                       <div className="free-point-help">
                         <strong>当前以 3D/SLAM 对齐后的覆盖区为准</strong>
                         <span>只在绿色边框内点击，点位会按点击顺序下发给 nano1</span>
-                        <button type="button" onClick={() => updatePlanForm('routePoints', [])}>清空路线</button>
+                        <button type="button" onClick={clearPlanRoute}>清空路线</button>
                       </div>
                     </div>
                     )}
                   </aside>
                   <div className="plan-step-note">
-                    点位和路线在同一步完成：从固定点位库选择本次巡检点，再按右侧顺序微调执行路线。
+                    左侧选择或添加巡检点，右侧可调整执行顺序与每个点的到达朝向。
                   </div>
                 </div>
               )}
@@ -2187,9 +3113,9 @@ function ClusterControl() {
                 <strong>{planForm.name || '未命名任务'}</strong>
                 <span>{planForm.area} / {planForm.robot}</span>
                 <span>
-                  {planForm.sceneId === 'lab-building' ? (planForm.routePoints?.length || 0) : planForm.selectedPointIds.length}
-                  {planForm.sceneId === 'lab-building' ? ' 个自由导航点' : ' 个固定巡检点'}
-                  {' / '}{getEstimatedMinutes(planForm.sceneId === 'lab-building' ? (planForm.routePoints?.length || 0) : planForm.selectedPointIds.length)} 分钟 / {planForm.priority}优先级</span>
+                  {activePlanRoutePoints.length}
+                  {planForm.sceneId === 'lab-building' ? ' 个路线点' : ' 个固定巡检点'}
+                  {' / '}{getEstimatedMinutes(activePlanRoutePoints.length)} 分钟 / {planForm.priority}优先级</span>
               </div>
 
               <div className="modal-actions">
