@@ -27,6 +27,7 @@ try:
         SystemLog,
         ThresholdRule,
     )
+    from .navigation_workflow import begin_route_execution, navigation_execution_id, start_route_monitor
     from .vehicle_client import send_navigation_route
 except ImportError:
     from database import get_db
@@ -49,6 +50,7 @@ except ImportError:
         SystemLog,
         ThresholdRule,
     )
+    from navigation_workflow import begin_route_execution, navigation_execution_id, start_route_monitor
     from vehicle_client import send_navigation_route
 
 
@@ -420,6 +422,10 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'failureReason': record.failure_reason,
                     'startedAt': record.started_at.isoformat(sep=' ') if record.started_at else None,
                     'finishedAt': record.finished_at.isoformat(sep=' ') if record.finished_at else None,
+                    'executionId': ((record.task.task_payload or {}).get('routeWorkflow') or {}).get('executionId') if record.task else None,
+                    'navigation': ((record.task.task_payload or {}).get('routeWorkflow') or {}).get('navigation') if record.task else None,
+                    'postExecution': ((record.task.task_payload or {}).get('routeWorkflow') or {}).get('postExecution') if record.task else None,
+                    'captureEvents': ((record.task.task_payload or {}).get('routeWorkflow') or {}).get('captureEvents') if record.task else None,
                     'routePoints': [
                         {
                             **(point.point_payload or {}),
@@ -672,6 +678,14 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
         task.status = 'running'
         record.status = 'running'
+        business_execution = begin_route_execution(
+            db,
+            task_id,
+            payload.vehicle_id,
+            vehicle_response,
+            record_id=record.id,
+        )
+        start_route_monitor(task_id, payload.vehicle_id, navigation_execution_id(vehicle_response))
         _add_system_log(db, current_user, '巡检任务管理', '下发实车路线', f'{task_id} → {payload.vehicle_id}')
         db.commit()
         return {
@@ -680,6 +694,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
             'vehicleId': payload.vehicle_id,
             'goalCount': len(goals),
             'vehicleResponse': vehicle_response,
+            'businessExecution': business_execution,
         }
 
     @router.post('/tasks/{task_id}/status')

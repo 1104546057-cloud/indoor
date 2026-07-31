@@ -1,5 +1,5 @@
 /* eslint-disable react/prop-types */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LabBuilding3DPreview from '../components/LabBuilding3DPreview'
 import RouteManagementPanel from '../components/RouteManagementPanel'
@@ -231,9 +231,10 @@ const wholeRoomScope = {
   name: '整房巡检范围',
   area: `${hanlinRoomMap.name} / 整房巡检`,
   robot: 'nano1',
-  priority: '项',
+  priority: '高',
 }
 
+const PLAN_PRIORITY_OPTIONS = ['低', '中', '高', '紧急']
 const taskColumns = ['任务名称', '区域', '机器人', '开始时间', '状态', '进度', '操作']
 const aiColumns = ['识别对象', '任务 / 点位', '识别值', '标准范围', '置信度', '状态', '复核', '操作']
 const reportColumns = ['报告编号', '巡检任务', '巡检时间', '点位', '异常', '复核', '报告状态', '操作']
@@ -317,6 +318,19 @@ function getPresetPlanRoutePoints(sceneId) {
 
 const defaultLabRoutePoints = getPresetPlanRoutePoints('lab-building')
 
+function getCurrentPlanSchedule(now = new Date()) {
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  const hour = String(now.getHours()).padStart(2, '0')
+  const minute = String(now.getMinutes()).padStart(2, '0')
+
+  return {
+    startDate: `${year}-${month}-${day}`,
+    startTime: `${hour}:${minute}`,
+  }
+}
+
 const defaultPlanForm = {
   name: '实验楼一层环廊巡检任务',
   sceneId: 'lab-building',
@@ -324,8 +338,7 @@ const defaultPlanForm = {
   areaId: wholeRoomScope.id,
   area: `${labBuildingMap.name} / 环形走廊`,
   robot: wholeRoomScope.robot,
-  startDate: '2026-06-22',
-  startTime: '09:30',
+  ...getCurrentPlanSchedule(),
   selectedPointIds: defaultLabRoutePoints.map((point) => point.id),
   routePoints: defaultLabRoutePoints,
   pointDirections: {},
@@ -578,6 +591,16 @@ function formatArchiveDateTime(value, fallback = '--') {
   return String(value).replace('T', ' ').slice(0, 19)
 }
 
+function formatNavigationEventTime(value) {
+  const timestamp = Number(value)
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '--:--'
+  return new Date(timestamp * 1000).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 function formatRealDuration(startValue, endValue) {
   if (!startValue || !endValue) return '未结束'
   const start = new Date(String(startValue).replace(' ', 'T'))
@@ -701,6 +724,22 @@ function buildBusinessArchiveRecords(business, taskList) {
           type: ['异常', '告警'].includes(result.status) ? 'AL' : 'AI',
           state: ['异常', '告警'].includes(result.status) ? 'alarm' : 'done',
         }))
+      const arrivalTimeline = (record.navigation?.results || [])
+        .filter((result) => result.state === 'arrived')
+        .map((result, index) => ({
+          time: formatNavigationEventTime(result.finished_at),
+          label: `到达 ${result.point_name || result.point_id || `巡检点 ${index + 1}`}`,
+          type: 'POS',
+          state: 'done',
+        }))
+      const captureTimeline = Object.values(record.captureEvents || {}).map((event) => ({
+        time: formatArchiveDateTime(event.acceptedAt || event.failedAt || event.requestedAt).slice(11, 16),
+        label: event.status === 'accepted'
+          ? `${event.pointName || event.pointId || '巡检点'} 图片采集已受理`
+          : `${event.pointName || event.pointId || '巡检点'} 图片采集失败`,
+        type: event.status === 'accepted' ? 'IMG' : 'ERR',
+        state: event.status === 'accepted' ? 'done' : 'alarm',
+      }))
       const finishTimeline = {
         time: finishedAt === '--' ? '--:--' : finishedAt.slice(11, 16),
         label: status === '已完成' ? '巡检完成并归档' : record.failureReason || '任务中断',
@@ -745,8 +784,10 @@ function buildBusinessArchiveRecords(business, taskList) {
         aiPreview: relatedResults.slice(0, 3),
         images: relatedImages,
         failureReason: record.failureReason || '',
+        postExecution: record.postExecution || null,
+        captureEvents: record.captureEvents || {},
         createdBy: record.createdBy || '系统',
-        timeline: [startTimeline, ...resultTimeline, finishTimeline],
+        timeline: [startTimeline, ...arrivalTimeline, ...captureTimeline, ...resultTimeline, finishTimeline],
         source: 'business',
       }
     })
@@ -875,13 +916,13 @@ function buildReportRecords(archiveRecords) {
   return archiveRecords.map((record) => {
     const reportStatus = record.reviewState === '待复核'
       ? '待复核'
-      : (record.status === '异常' ? '待生成' : '已生成')
+      : (record.status === '异常' || record.postExecution?.reportReady === false ? '待生成' : '已生成')
 
     return {
       ...record,
       reportNo: `RPT-${String(record.archiveNo || record.id).replace(/^(ARC|REC)-?/, '')}`,
       reportStatus,
-      generatedAt: reportStatus === '已生成' ? `${record.start.slice(0, 10)} 17:05` : '--',
+      generatedAt: reportStatus === '已生成' ? record.endTime : '--',
     }
   })
 }
@@ -1555,6 +1596,7 @@ function PlanRoutePreview({
   const mapSvg = (
     <svg
       viewBox={viewBox}
+      preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="巡检点2D 路线预览"
       className={isSlamRouteMap ? 'slam-route-map' : undefined}
@@ -1782,11 +1824,15 @@ function ClusterControl() {
   const [selectedTaskId, setSelectedTaskId] = useState(initialTasks[0].id)
   const [actionNotice, setActionNotice] = useState('点击任务行查看执行详情，或使用右侧操作推进任务状态。')
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
-  const [planForm, setPlanForm] = useState(defaultPlanForm)
+  const [planForm, setPlanForm] = useState(() => ({
+    ...defaultPlanForm,
+    ...getCurrentPlanSchedule(),
+  }))
   const [planStep, setPlanStep] = useState(1)
   const [showSlamMap, setShowSlamMap] = useState(false)
   const [storedResults, setStoredResults] = useState(() => getInspectionResults())
   const [taskMonitorTelemetry, setTaskMonitorTelemetry] = useState(null)
+  const terminalExecutionRef = useRef(new Set())
   const [taskCameraAvailable, setTaskCameraAvailable] = useState(true)
   const [taskCameraRetryNonce, setTaskCameraRetryNonce] = useState(0)
   const activePlanMap = getSceneMap(planForm.sceneId)
@@ -1873,6 +1919,7 @@ function ClusterControl() {
   ), [archiveRecords, selectedTaskId])
   const contextTask = activeTab === 'records' && selectedArchiveRecord ? selectedArchiveRecord : selectedTask
   const isContextTaskRunning = contextTask.status === '执行中'
+  const isContextTaskPending = contextTask.status === '待执行'
   const contextAiItems = activeTab === 'records' && selectedArchiveRecord
     ? (selectedArchiveRecord.recognitionResults?.length ? selectedArchiveRecord.recognitionResults : selectedArchiveRecord.aiPreview)
     : aiPreviewItems
@@ -2011,6 +2058,11 @@ function ClusterControl() {
               },
             }
           }))
+          const terminalExecutionId = navigation.execution_id || `${contextTask.id}:${navigation.state}`
+          if (terminalStatus && !terminalExecutionRef.current.has(terminalExecutionId)) {
+            terminalExecutionRef.current.add(terminalExecutionId)
+            reloadArchive(true)
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -2031,7 +2083,7 @@ function ClusterControl() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [contextMonitor?.executionId, contextSceneMap, contextTask.id, contextTask.robot, isContextTaskRunning])
+  }, [contextMonitor?.executionId, contextSceneMap, contextTask.id, contextTask.robot, isContextTaskRunning, reloadArchive])
 
   useEffect(() => {
     setTaskCameraAvailable(true)
@@ -2106,10 +2158,18 @@ function ClusterControl() {
   }
 
   const openPlanModal = (areaTemplate) => {
+    const currentSchedule = getCurrentPlanSchedule()
+
     if (areaTemplate) {
-      setPlanForm(getAreaForm(areaTemplate))
+      setPlanForm({
+        ...getAreaForm(areaTemplate),
+        ...currentSchedule,
+      })
     } else {
-      setPlanForm(defaultPlanForm)
+      setPlanForm({
+        ...defaultPlanForm,
+        ...currentSchedule,
+      })
     }
 
     setPlanStep(1)
@@ -2699,7 +2759,7 @@ function ClusterControl() {
         </main>
 
         {activeTab !== 'records' && <aside className="task-side-zone task-side-zone-single">
-          <section className="console-panel current-task-panel">
+          <section className={`console-panel current-task-panel${isContextTaskPending ? ' pending-task' : ''}`}>
             <div className="panel-heading compact task-detail-heading">
               <h2>{contextPanel.detailTitle}</h2>
               <span className={`task-live-badge ${isContextTaskRunning ? (taskMonitorTelemetry?.connected ? 'online' : 'offline') : 'standby'}`}>
@@ -2725,6 +2785,31 @@ function ClusterControl() {
               </dl>
             </div>
 
+            {isContextTaskPending ? (
+              <article className="task-planned-route">
+                <header>
+                  <div>
+                    <span>PLANNED ROUTE</span>
+                    <strong>任务地图与巡检路线</strong>
+                  </div>
+                  <b>{contextRoutePoints.length} POINTS</b>
+                </header>
+                <div className="task-planned-route-map">
+                  <PlanRoutePreview
+                    compact
+                    pointIds={contextRoutePoints.map((point) => point.id)}
+                    routePoints={contextRoutePoints}
+                    mapData={contextSceneMap}
+                    showRoute
+                  />
+                  <div className="task-route-legend">
+                    <span><i className="route-line" />按编号顺序执行</span>
+                    <span><i className="route-start" />绿色为起点</span>
+                    <span><i className="route-heading" />箭头为到点朝向</span>
+                  </div>
+                </div>
+              </article>
+            ) : (
             <div className="task-live-windows">
               <article className="task-live-window task-camera-window">
                 <header>
@@ -2793,6 +2878,7 @@ function ClusterControl() {
                 </div>
               </article>
             </div>
+            )}
 
             <div className="side-progress">
               <span>{contextPanel.progressLabel}</span>
@@ -2950,10 +3036,10 @@ function ClusterControl() {
                     </label>
                     <label>
                       <span>执行机器人</span>
-                      <select value={planForm.robot} onChange={(event) => updatePlanForm('robot', event.target.value)}>
-                        <option>nano1</option>
-                        <option>nano2</option>
-                        <option>nano3</option>
+                      <select aria-label="执行机器人" value={planForm.robot} onChange={(event) => updatePlanForm('robot', event.target.value)}>
+                        <option value="nano1">nano1</option>
+                        <option value="nano2">nano2</option>
+                        <option value="nano3">nano3</option>
                       </select>
                     </label>
                     <div className="config-grid">
@@ -2968,11 +3054,10 @@ function ClusterControl() {
                     </div>
                     <label>
                       <span>任务优先</span>
-                      <select value={planForm.priority} onChange={(event) => updatePlanForm('priority', event.target.value)}>
-                        <option></option>
-                        <option></option>
-                        <option></option>
-                        <option>紧急</option>
+                      <select aria-label="任务优先级" value={planForm.priority} onChange={(event) => updatePlanForm('priority', event.target.value)}>
+                        {PLAN_PRIORITY_OPTIONS.map((priority) => (
+                          <option value={priority} key={priority}>{priority}</option>
+                        ))}
                       </select>
                     </label>
                     <div className="scope-note">

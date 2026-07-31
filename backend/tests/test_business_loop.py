@@ -82,6 +82,166 @@ def test_navigation_route_cancel_proxy(monkeypatch):
     assert response.json()['navigation']['state'] == 'cancelled'
 
 
+def test_direct_task_route_is_persisted_and_archived_on_vehicle_completion(monkeypatch):
+    task_id = f'task-route-workflow-{uuid4().hex}'
+    point = {
+        'id': 'LAB-FREE-WORKFLOW-001',
+        'name': '业务闭环测试点',
+        'targetName': '业务闭环测试点',
+        'x': 72000,
+        'y': 17000,
+        'yaw': 'east',
+    }
+    created = client.post('/api/tasks', json={
+        'id': task_id,
+        'sceneId': 'lab-building',
+        'name': '路线完成自动归档测试',
+        'area': '实验楼一层',
+        'robot': 'nano1',
+        'pointIds': [point['id']],
+        'routePoints': [point],
+        'status': '待执行',
+        'detail': {'pointTotal': 1},
+    })
+    assert created.status_code == 200
+
+    execution_id = f'route-{uuid4().hex}'
+
+    def dispatch(_vehicle_id, payload):
+        return {
+            'online': True,
+            'navigation': {
+                'execution_id': execution_id,
+                'task_id': payload['task_id'],
+                'state': 'queued',
+                'route_index': 0,
+                'route_total': 1,
+                'reached_count': 0,
+                'results': [],
+            },
+        }
+
+    monkeypatch.setattr(main_module, 'send_navigation_route', dispatch)
+    monkeypatch.setattr(main_module, 'start_route_monitor', lambda *_args: True)
+    started = client.post('/api/vehicle/navigation-route', json={
+        'vehicle_id': 'nano1',
+        'task_id': task_id,
+        'speed': 0.2,
+        'goals': [{
+            'frame_id': 'map',
+            'x': 1.2,
+            'y': 2.4,
+            'yaw': 0,
+            'point_id': point['id'],
+            'point_name': point['name'],
+        }],
+    })
+    assert started.status_code == 200
+    assert started.json()['business']['status'] == '执行中'
+    record_id = started.json()['business']['recordId']
+
+    def completed_status(_vehicle_id, requested_execution_id):
+        assert requested_execution_id == execution_id
+        return {
+            'vehicle_id': 'nano1',
+            'navigation': {
+                'execution_id': execution_id,
+                'task_id': task_id,
+                'state': 'completed',
+                'route_index': 1,
+                'route_total': 1,
+                'reached_count': 1,
+                'last_error': None,
+                'results': [{
+                    'index': 1,
+                    'point_id': point['id'],
+                    'point_name': point['name'],
+                    'state': 'arrived',
+                    'finished_at': 1785501000.0,
+                    'move_base_state': 3,
+                }],
+            },
+        }
+
+    monkeypatch.setattr(main_module, 'get_navigation_route_status', completed_status)
+    completed = client.get('/api/vehicle/navigation-route/status', params={
+        'vehicle_id': 'nano1',
+        'execution_id': execution_id,
+    })
+    assert completed.status_code == 200
+    assert completed.json()['business']['archiveReady'] is True
+    assert completed.json()['business']['reportReady'] is True
+
+    tasks = client.get('/api/tasks').json()['tasks']
+    stored_task = next(task for task in tasks if task['id'] == task_id)
+    assert stored_task['status'] == '已完成'
+    assert stored_task['progress'] == 100
+
+    overview = client.get('/api/business/overview').json()
+    record = next(item for item in overview['records'] if item['id'] == record_id)
+    assert record['status'] == 'completed'
+    assert record['progress'] == 100
+    assert record['currentSequence'] == 1
+    assert record['finishedAt'] is not None
+    assert record['navigation']['results'][0]['state'] == 'arrived'
+
+    recognition = client.post('/api/recognition/results', json={
+        'taskId': task_id,
+        'robotId': 'nano1',
+        'pointId': point['id'],
+        'targetName': '测试温度表',
+        'recognitionType': '数显识别',
+        'recognitionValue': '82.5',
+        'numericValue': 82.5,
+        'unit': '°C',
+        'confidence': 98.2,
+        'status': '异常',
+    })
+    assert recognition.status_code == 200
+    result_id = recognition.json()['result']['id']
+
+    tasks = client.get('/api/tasks').json()['tasks']
+    stored_task = next(task for task in tasks if task['id'] == task_id)
+    assert stored_task['status'] == '待审核'
+    overview = client.get('/api/business/overview').json()
+    record = next(item for item in overview['records'] if item['id'] == record_id)
+    assert record['postExecution']['abnormalCount'] == 1
+    assert record['postExecution']['reviewStatus'] == '待复核'
+    assert record['postExecution']['reportReady'] is False
+
+    reviewed = client.post(f'/api/recognition/results/{result_id}/review', json={
+        'review_status': '已确认',
+        'review_remark': '自动化测试复核完成',
+        'reviewed_by': 'tester',
+    })
+    assert reviewed.status_code == 200
+    tasks = client.get('/api/tasks').json()['tasks']
+    stored_task = next(task for task in tasks if task['id'] == task_id)
+    assert stored_task['status'] == '已完成'
+    overview = client.get('/api/business/overview').json()
+    record = next(item for item in overview['records'] if item['id'] == record_id)
+    assert record['postExecution']['reviewStatus'] == '已复核'
+    assert record['postExecution']['reportReady'] is True
+
+    with SessionLocal() as db:
+        recognition_result = db.get(business_router_module.RecognitionResult, result_id)
+        if recognition_result is not None:
+            db.delete(recognition_result)
+        workflow_record = db.get(business_router_module.InspectionRecord, record_id)
+        if workflow_record is not None:
+            db.delete(workflow_record)
+        db.commit()
+    deleted = client.delete(f'/api/tasks/{task_id}')
+    assert deleted.status_code == 200
+    with SessionLocal() as db:
+        robot = db.query(business_router_module.Robot).filter(
+            business_router_module.Robot.robot_code == 'nano1'
+        ).first()
+        if robot is not None:
+            db.delete(robot)
+        db.commit()
+
+
 def test_real_vehicle_business_loop(monkeypatch):
     dispatched = {}
 

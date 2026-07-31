@@ -1763,6 +1763,50 @@
   outline: 0;
   padding: 0 10px;
   clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+  color-scheme: dark;
+  font-size: 13px;
+  font-weight: 800;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.plan-form select {
+  appearance: none;
+  padding-right: 40px;
+  background-color: rgba(3, 24, 39, 0.94);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%2362c8ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  cursor: pointer;
+}
+
+.plan-form select:hover {
+  border-color: rgba(98, 200, 255, 0.5);
+  background-color: rgba(5, 36, 55, 0.98);
+}
+
+.plan-form select option {
+  color: #e9ffff;
+  background: #08263a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.plan-form select option:checked {
+  color: #061b29;
+  background: #35d7c4;
+}
+
+.plan-form input[type='date'],
+.plan-form input[type='time'] {
+  letter-spacing: 0.3px;
+}
+
+.plan-form input[type='date']::-webkit-calendar-picker-indicator,
+.plan-form input[type='time']::-webkit-calendar-picker-indicator {
+  opacity: 0.85;
+  cursor: pointer;
+  filter: invert(82%) sepia(31%) saturate(1034%) hue-rotate(154deg) brightness(101%);
 }
 
 .plan-form input:focus,
@@ -2067,12 +2111,169 @@
   white-space: nowrap;
 }
 
+.current-task-panel.pending-task .task-detail-overview {
+  gap: 6px;
+}
+
+.current-task-panel.pending-task .task-detail-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.current-task-panel.pending-task .task-detail-metrics > div {
+  min-height: 38px;
+  display: grid;
+  align-content: center;
+  justify-content: stretch;
+  gap: 2px;
+  padding: 4px 7px;
+}
+
+.current-task-panel.pending-task .task-detail-metrics dd {
+  text-align: left;
+}
+
 .task-live-windows {
   min-height: 0;
   flex: 1 1 auto;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.task-planned-route {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(158, 223, 234, 0.16);
+  background: rgba(3, 21, 34, 0.76);
+}
+
+.task-planned-route > header {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(158, 223, 234, 0.12);
+  background: linear-gradient(90deg, rgba(12, 76, 98, 0.42), rgba(5, 30, 48, 0.56));
+}
+
+.task-planned-route > header div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.task-planned-route > header span {
+  color: #45e2f6;
+  font: 900 8px/1 "Courier New", monospace;
+  letter-spacing: 1px;
+}
+
+.task-planned-route > header strong {
+  overflow: hidden;
+  color: #dffcff;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-planned-route > header b {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  border: 1px solid rgba(53, 240, 189, 0.5);
+  color: #35f0bd;
+  font: 900 8px/1 "Courier New", monospace;
+}
+
+.task-planned-route-map {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(158, 223, 234, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(158, 223, 234, 0.035) 1px, transparent 1px),
+    #041923;
+  background-size: 14px 14px;
+}
+
+.task-planned-route-map .task-mini-route-preview {
+  position: absolute;
+  inset: 0 0 31px;
+  width: auto;
+  height: auto;
+  padding: 5px 7px;
+}
+
+.task-planned-route-map .task-mini-route-preview .route-map-canvas {
+  position: absolute;
+  inset: 5px 7px;
+  width: auto;
+  height: auto;
+  display: block;
+}
+
+.task-planned-route-map .task-mini-route-preview svg,
+.task-planned-route-map .task-mini-route-preview svg.slam-route-map {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  aspect-ratio: auto;
+}
+
+.task-route-legend {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  left: 8px;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 4px 8px;
+  color: #91bdc7;
+  background: rgba(3, 21, 34, 0.86);
+  border: 1px solid rgba(158, 223, 234, 0.1);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.task-route-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.task-route-legend i {
+  width: 12px;
+  height: 3px;
+  display: inline-block;
+  background: #35f0bd;
+  box-shadow: 0 0 5px rgba(53, 240, 189, 0.5);
+}
+
+.task-route-legend .route-start {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.task-route-legend .route-heading {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 7px solid #ffd166;
+  background: transparent;
+  box-shadow: none;
 }
 
 .task-live-window {

@@ -17,6 +17,15 @@ try:
     from .business_router import create_business_router
     from .database import Base, engine, get_db
     from .inspection_service import apply_threshold_rules
+    from .navigation_workflow import (
+        begin_route_execution,
+        mark_route_dispatch_failed,
+        navigation_execution_id,
+        refresh_post_execution_state,
+        resume_route_monitors,
+        start_route_monitor,
+        sync_route_execution,
+    )
     from .models import (
         ImageRecord,
         InspectionPoint,
@@ -52,6 +61,15 @@ except ImportError:
     from business_router import create_business_router
     from database import Base, engine, get_db
     from inspection_service import apply_threshold_rules
+    from navigation_workflow import (
+        begin_route_execution,
+        mark_route_dispatch_failed,
+        navigation_execution_id,
+        refresh_post_execution_state,
+        resume_route_monitors,
+        start_route_monitor,
+        sync_route_execution,
+    )
     from models import (
         ImageRecord,
         InspectionPoint,
@@ -101,6 +119,7 @@ async def lifespan(_: FastAPI):
     # 旧开发库可显式开启兼容建表；常规环境由 Alembic 管理结构版本。
     if os.getenv('AUTO_CREATE_TABLES', 'false').lower() in {'1', 'true', 'yes'}:
         Base.metadata.create_all(bind=engine)
+    resume_route_monitors()
     yield
 
 
@@ -724,6 +743,7 @@ def create_recognition_result(payload: RecognitionResultCreate, db: Session = De
     apply_threshold_rules(db, result)
     db.commit()
     db.refresh(result)
+    refresh_post_execution_state(db, task_id)
     return {'message': 'AI识别结果已入库', 'result': _serialize_recognition_result(result)}
 
 
@@ -849,6 +869,7 @@ def review_recognition_result(
     result.reviewed_at = datetime.now()
     db.commit()
     db.refresh(result)
+    refresh_post_execution_state(db, result.task_id)
     return {'message': '复核结果已更新', 'result': _serialize_recognition_result(result)}
 
 
@@ -913,6 +934,7 @@ def vehicle_navigation_goal(
 def vehicle_navigation_route(
     request: NavigationRouteRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     if not request.goals:
         raise HTTPException(status_code=400, detail='navigation route requires at least one goal')
@@ -935,7 +957,19 @@ def vehicle_navigation_route(
             for goal in request.goals
         ],
     }
-    return send_navigation_route(request.vehicle_id, route)
+    vehicle_id = request.vehicle_id or 'nano1'
+    try:
+        response = send_navigation_route(request.vehicle_id, route)
+    except HTTPException as error:
+        mark_route_dispatch_failed(db, request.task_id, vehicle_id, str(error.detail))
+        raise
+
+    business_execution = begin_route_execution(db, request.task_id, vehicle_id, response)
+    execution_id = navigation_execution_id(response)
+    start_route_monitor(request.task_id, vehicle_id, execution_id)
+    if isinstance(response, dict) and business_execution:
+        return {**response, 'business': business_execution}
+    return response
 
 
 @app.get("/api/vehicle/navigation-route/status")
@@ -943,17 +977,27 @@ def vehicle_navigation_route_status(
     vehicle_id: str | None = None,
     execution_id: str | None = None,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     # 到点进度必须以车端 move_base 的结果为准，不能由网页按时间或距离推测。
-    return get_navigation_route_status(vehicle_id, execution_id)
+    response = get_navigation_route_status(vehicle_id, execution_id)
+    navigation = response.get('navigation') if isinstance(response, dict) else None
+    task_id = navigation.get('task_id') if isinstance(navigation, dict) else None
+    business_execution = sync_route_execution(db, task_id, vehicle_id or 'nano1', response)
+    return {**response, 'business': business_execution} if business_execution else response
 
 
 @app.post("/api/vehicle/navigation-route/cancel")
 def vehicle_navigation_route_cancel(
     request: NavigationRouteCancelRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    return cancel_navigation_route(request.vehicle_id, request.execution_id)
+    response = cancel_navigation_route(request.vehicle_id, request.execution_id)
+    navigation = response.get('navigation') if isinstance(response, dict) else None
+    task_id = navigation.get('task_id') if isinstance(navigation, dict) else None
+    business_execution = sync_route_execution(db, task_id, request.vehicle_id or 'nano1', response)
+    return {**response, 'business': business_execution} if business_execution else response
 
 
 @app.post("/api/vehicle/stop")

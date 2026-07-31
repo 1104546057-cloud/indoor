@@ -30,6 +30,11 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32
 
 try:
+    from std_srvs.srv import Empty
+except ImportError:
+    Empty = None
+
+try:
     import actionlib
     from actionlib_msgs.msg import GoalStatus
     from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
@@ -93,6 +98,15 @@ class VehicleController(object):
         self.move_base_wait_timeout = rospy.get_param("~move_base_wait_timeout", 2.0)
         self.route_goal_timeout = rospy.get_param("~route_goal_timeout", 180.0)
         self.route_arrival_pause = rospy.get_param("~route_arrival_pause", 0.5)
+        self.clear_costmaps_before_route = rospy.get_param(
+            "~clear_costmaps_before_route",
+            True,
+        )
+        self.clear_costmaps_timeout = rospy.get_param(
+            "~clear_costmaps_timeout",
+            3.0,
+        )
+        self.costmap_reset_wait = rospy.get_param("~costmap_reset_wait", 2.0)
         self.map_frame = rospy.get_param("~map_frame", "map")
         self.base_frame = rospy.get_param("~base_frame", "base_link")
         self.pose_stale_timeout = rospy.get_param("~pose_stale_timeout", 2.0)
@@ -134,6 +148,11 @@ class VehicleController(object):
             if self.navigation_available
             else None
         )
+        self.clear_costmaps_client = (
+            rospy.ServiceProxy("/move_base/clear_costmaps", Empty)
+            if Empty is not None
+            else None
+        )
         self.navigation_state = self._idle_navigation_state()
         self.route_thread = None
 
@@ -167,6 +186,59 @@ class VehicleController(object):
 
     def _touch_navigation_locked(self):
         self.navigation_state["updated_at"] = time.time()
+
+    def _prepare_route_costmaps(self, execution_id):
+        """Clear stale obstacle cells and wait for fresh lidar observations.
+
+        A 2D Pose Estimate changes map->odom without physically moving the
+        robot.  A non-rolling global obstacle layer can therefore retain
+        obstacle cells written using the old map pose.  Clearing immediately
+        before a route removes those stale cells; the short wait lets the
+        active laser source mark any obstacles that are still present.
+        """
+        if not self.clear_costmaps_before_route:
+            return
+        if self.clear_costmaps_client is None:
+            rospy.logwarn("costmap reset skipped: std_srvs is unavailable")
+            return
+
+        with self.lock:
+            if (
+                self.navigation_state.get("execution_id") != execution_id
+                or not self.navigation_state.get("active")
+            ):
+                return
+            self.navigation_state.update({
+                "state": "preparing",
+                "last_status": "clearing_costmaps",
+                "last_error": None,
+            })
+            self._touch_navigation_locked()
+
+        try:
+            rospy.wait_for_service(
+                "/move_base/clear_costmaps",
+                timeout=float(self.clear_costmaps_timeout),
+            )
+            self.clear_costmaps_client()
+            rospy.sleep(max(0.0, float(self.costmap_reset_wait)))
+            with self.lock:
+                if self.navigation_state.get("execution_id") == execution_id:
+                    self.navigation_state["last_status"] = "costmaps_ready"
+                    self._touch_navigation_locked()
+            rospy.loginfo(
+                "route %s costmaps cleared; waited %.2fs for fresh scans",
+                execution_id,
+                float(self.costmap_reset_wait),
+            )
+        except Exception as error:
+            # Keep the existing behavior when the optional service is not
+            # available; move_base will still perform its normal recoveries.
+            rospy.logwarn(
+                "route %s could not clear costmaps before dispatch: %s",
+                execution_id,
+                error,
+            )
 
     def _limit(self, value, limit):
         return max(-limit, min(limit, float(value)))
@@ -501,6 +573,7 @@ class VehicleController(object):
             execution_id,
             len(goals),
         )
+        self._prepare_route_costmaps(execution_id)
         for index, goal_data in enumerate(goals, start=1):
             if rospy.is_shutdown():
                 return
