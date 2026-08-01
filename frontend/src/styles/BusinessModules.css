@@ -115,3 +115,69 @@
 .alarm-clear-state small {
   color: #8fcfdd;
 }
+
+/* 设备主数据增强管理器 */
+.business-resource-manager { min-height: 0; display: grid; grid-template-rows: 48px minmax(0, 1fr); gap: 12px; }
+.business-resource-toolbar { min-width: 0; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.35fr) 150px auto; align-items: center; gap: 10px; padding: 7px 12px; border: 1px solid rgba(158, 223, 234, .22); background: rgba(7, 45, 61, .78); }
+.business-resource-toolbar > div { display: flex; align-items: baseline; gap: 10px; }
+.business-resource-toolbar strong { font-size: 15px; }
+.business-resource-toolbar span { color: #80b7c1; font-size: 12px; }
+.business-resource-toolbar input,
+.business-resource-toolbar select,
+.business-resource-toolbar button { min-width: 0; min-height: 34px; padding: 0 11px; color: #dff9fd; border: 1px solid rgba(158, 223, 234, .22); background: rgba(5, 31, 45, .82); font-size: 12px; }
+.business-resource-grid.enhanced { grid-template-columns: minmax(400px, .9fr) minmax(540px, 1.1fr); }
+.business-resource-list { display: grid; grid-template-rows: minmax(0, 1fr) 38px; }
+.business-master-list { align-content: start; max-height: none; }
+.business-master-row { width: 100%; min-height: 68px; display: grid; grid-template-columns: 105px minmax(0, 1fr) 54px; align-items: center; gap: 12px; padding: 10px 12px; color: #dff8fb; border: 1px solid rgba(158, 223, 234, .13); border-radius: 4px; background: rgba(5, 38, 54, .58); text-align: left; }
+.business-master-row:hover,
+.business-master-row.selected { border-color: rgba(64, 221, 229, .62); background: rgba(16, 88, 103, .55); }
+.business-master-row > span { color: #72cad9; font: 700 11px "Courier New", monospace; }
+.business-master-row > div { min-width: 0; display: grid; gap: 3px; }
+.business-master-row strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.business-master-row small,
+.business-master-row p { overflow: hidden; margin: 0; color: #88b7c0; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.business-master-row em { padding: 4px 5px; color: #77e7bd; border: 1px solid rgba(68, 226, 180, .3); font-size: 10px; font-style: normal; text-align: center; }
+.business-master-row em.inactive { color: #ff9ba8; border-color: rgba(255, 112, 130, .3); }
+.business-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 7px; padding-top: 7px; color: #83b4bd; font-size: 11px; }
+.business-pagination button { min-height: 28px; padding: 0 10px; color: #bdeaf0; border: 1px solid rgba(158, 223, 234, .2); background: rgba(7, 45, 61, .72); }
+.business-pagination button:disabled { opacity: .35; }
+.business-resource-form.enhanced { overflow: auto; font-size: 12px; }
+.business-resource-form.enhanced fieldset,
+.vehicle-registry-form fieldset { min-width: 0; display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.business-resource-form.enhanced label,
+.vehicle-registry-form label { font-size: 12px; }
+.business-resource-form textarea { min-height: 58px; padding: 8px 9px; resize: vertical; color: #e7fbff; border: 1px solid rgba(158, 223, 234, .2); background: rgba(5, 35, 50, .72); }
+.resource-actions,
+.resource-form-actions { display: flex !important; flex-direction: row !important; align-items: center; gap: 7px; }
+.resource-actions button,
+.resource-form-actions button { min-height: 30px; padding: 0 11px; color: #c8f3f7; border: 1px solid rgba(158, 223, 234, .25); background: rgba(8, 53, 69, .76); }
+.resource-actions button.danger { color: #ffabb6; border-color: rgba(255, 104, 124, .4); }
+.resource-form-actions { justify-content: flex-end; }
+.resource-active-switch { display: flex !important; grid-column: 1 / -1; flex-direction: row !important; align-items: center; gap: 8px !important; }
+.resource-active-switch input { width: 16px !important; min-height: 16px !important; }
+.resource-readonly { display: grid; gap: 10px; }
+.resource-readonly fieldset { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.resource-readonly input,
+.resource-readonly select,
+.resource-readonly textarea { color: #d9f8ff; opacity: .82; cursor: default; }
+.resource-disabled-notice { padding: 8px 10px; color: #ffc28a; border-left: 3px solid #f3a34e; background: rgba(115, 70, 25, .18); font-size: 11px; }
+.business-upload-field > div { display: grid; grid-template-columns: minmax(0, 1fr) 74px; }
+.business-upload-field b { position: relative; display: grid; place-items: center; overflow: hidden; color: #d9fbff; border: 1px solid rgba(158, 223, 234, .25); background: rgba(20, 90, 105, .7); }
+.business-upload-field b input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.business-upload-error { display: block; margin-top: 5px; color: #ff8585; }
+.roi-editor { display: grid; gap: 7px; }
+.roi-editor-head { display: flex; align-items: center; gap: 10px; }
+.roi-editor-head strong { font-size: 12px; }
+.roi-editor-head span { flex: 1; color: #7caab4; font-size: 11px; }
+.roi-editor-head button { color: #ffb0ba; border: 0; background: transparent; font-size: 11px; }
+.roi-canvas { position: relative; min-height: 190px; display: grid; place-items: center; overflow: hidden; color: #527f8a; border: 1px dashed rgba(158, 223, 234, .25); background: #051d29; user-select: none; }
+.roi-canvas.ready { cursor: crosshair; }
+.roi-canvas img { width: 100%; height: 220px; object-fit: contain; pointer-events: none; }
+.roi-canvas i { position: absolute; border: 2px solid #39f1cd; background: rgba(36, 231, 196, .13); box-shadow: 0 0 0 9999px rgba(0, 10, 15, .32); pointer-events: none; }
+.roi-editor > small { color: #76bdca; font: 11px "Courier New", monospace; }
+.business-form-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@media (max-width: 1280px) {
+  .business-resource-toolbar { grid-template-columns: 1fr 1fr 130px; }
+  .business-resource-grid.enhanced { grid-template-columns: 1fr; overflow: auto; }
+}

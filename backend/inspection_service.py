@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from uuid import uuid4
 
@@ -26,7 +28,10 @@ def evaluate_result(
 ) -> tuple[str, str | None, ThresholdRule | None]:
     """依据监测对象配置判定真实 AI 上报，不信任客户端预先给出的状态。"""
 
-    rule = next((candidate for candidate in item.threshold_rules if candidate.is_active), None)
+    rule = next(
+        (candidate for candidate in sorted(item.threshold_rules, key=lambda entry: entry.id) if candidate.is_active),
+        None,
+    )
     if confidence is not None and confidence < 60:
         return '异常', f'识别置信度过低：{confidence:.1f}%', rule
     if rule and numeric_value is not None:

@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import json
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -18,6 +23,7 @@ VEHICLE_REQUEST_TIMEOUT = float(os.getenv('VEHICLE_REQUEST_TIMEOUT', '1.5'))
 VEHICLE_START_TIMEOUT = float(os.getenv('VEHICLE_START_TIMEOUT', '8'))
 VEHICLE_CONNECT_RETRIES = int(os.getenv('VEHICLE_CONNECT_RETRIES', '10'))
 VEHICLE_CONNECT_RETRY_DELAY = float(os.getenv('VEHICLE_CONNECT_RETRY_DELAY', '0.8'))
+VEHICLE_STATUS_CACHE_TTL = float(os.getenv('VEHICLE_STATUS_CACHE_TTL', '6'))
 
 _VEHICLES_FILE = Path(__file__).with_name('vehicles.json')
 
@@ -57,21 +63,136 @@ def _load_registry():
 
 
 _VEHICLES, _DEFAULT_VEHICLE_ID = _load_registry()
+_REGISTRY_LOCK = threading.RLock()
+_PROBE_LOCK = threading.Lock()
+_STATUS_CACHE = {}
 
 
-def list_vehicles():
+def _save_registry():
+    """将内存中的车辆配置原子写回本机注册表。"""
+
+    payload = {
+        'default_vehicle_id': _DEFAULT_VEHICLE_ID,
+        'vehicles': list(_VEHICLES.values()),
+    }
+    _VEHICLES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _VEHICLES_FILE.with_suffix('.json.tmp')
+    with temporary.open('w', encoding='utf-8') as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write('\n')
+    os.replace(temporary, _VEHICLES_FILE)
+
+
+def upsert_vehicle_registry(vehicle_id: str, values: dict):
+    """新增或更新车辆连接配置；未传入的敏感字段沿用原值。"""
+
+    global _DEFAULT_VEHICLE_ID
+    clean_id = (vehicle_id or '').strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail='车辆编号不能为空')
+    with _REGISTRY_LOCK:
+        current = dict(_VEHICLES.get(clean_id, {}))
+        current.update({key: value for key, value in values.items() if value is not None})
+        current['id'] = clean_id
+        current.setdefault('name', clean_id)
+        if not current.get('agent_base_url'):
+            raise HTTPException(status_code=400, detail='车辆 agent 地址不能为空')
+        _VEHICLES[clean_id] = current
+        if not _DEFAULT_VEHICLE_ID:
+            _DEFAULT_VEHICLE_ID = clean_id
+        _STATUS_CACHE.pop(clean_id, None)
+        _save_registry()
+    return sanitized_vehicle_config(current)
+
+
+def remove_vehicle_registry(vehicle_id: str):
+    """从连接注册表移除车辆；调用方负责业务引用检查。"""
+
+    global _DEFAULT_VEHICLE_ID
+    with _REGISTRY_LOCK:
+        if vehicle_id not in _VEHICLES:
+            raise HTTPException(status_code=404, detail='车辆不存在')
+        _VEHICLES.pop(vehicle_id)
+        _STATUS_CACHE.pop(vehicle_id, None)
+        if _DEFAULT_VEHICLE_ID == vehicle_id:
+            _DEFAULT_VEHICLE_ID = next(iter(_VEHICLES), None)
+        _save_registry()
+
+
+def sanitized_vehicle_config(vehicle: dict):
+    """返回可安全发送给前端的连接配置。"""
+
+    return {
+        'id': vehicle['id'],
+        'name': vehicle.get('name', vehicle['id']),
+        'agent_base_url': vehicle.get('agent_base_url', ''),
+        'ssh_host': vehicle.get('ssh_host', ''),
+        'ssh_port': vehicle.get('ssh_port', 22),
+        'ssh_username': vehicle.get('ssh_username', ''),
+        'start_script': vehicle.get('start_script', ''),
+        'camera_streams': dict(vehicle.get('camera_streams') or {}),
+        'camera_roles': [
+            role
+            for role in ('movement', 'high', 'middle', 'low', 'ptz')
+            if _camera_stream_url(vehicle, role)
+        ],
+    }
+
+
+def list_vehicles(force_refresh: bool = False):
     """返回前端用的车辆列表（不含密码等敏感字段），并附带独立在线状态。"""
 
+    now = time.monotonic()
+    with _REGISTRY_LOCK:
+        vehicle_snapshot = [dict(vehicle) for vehicle in _VEHICLES.values()]
+    stale = [
+        vehicle for vehicle in vehicle_snapshot
+        if force_refresh
+        or vehicle['id'] not in _STATUS_CACHE
+        or now - _STATUS_CACHE[vehicle['id']]['cached_at'] >= VEHICLE_STATUS_CACHE_TTL
+    ]
+    if stale:
+        # 同一时刻只允许一个请求刷新心跳，避免前端多个页面轮询形成探测风暴。
+        with _PROBE_LOCK:
+            now = time.monotonic()
+            targets = [
+                vehicle for vehicle in stale
+                if force_refresh
+                or vehicle['id'] not in _STATUS_CACHE
+                or now - _STATUS_CACHE[vehicle['id']]['cached_at'] >= VEHICLE_STATUS_CACHE_TTL
+            ]
+            if targets:
+                with ThreadPoolExecutor(max_workers=min(8, len(targets))) as executor:
+                    futures = {executor.submit(_probe_vehicle_status, vehicle): vehicle['id'] for vehicle in targets}
+                    for future in as_completed(futures):
+                        vehicle_id = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:  # 单车探测异常不能拖垮整批车辆状态接口
+                            result = {
+                                'online': False,
+                                'status': 'offline',
+                                'error': f'状态探测异常：{exc}',
+                                'last_seen_at': None,
+                            }
+                        _STATUS_CACHE[vehicle_id] = {**result, 'cached_at': time.monotonic()}
+
     items = []
-    for vehicle in _VEHICLES.values():
-        status = _probe_vehicle_status(vehicle)
+    for vehicle in vehicle_snapshot:
+        status = _STATUS_CACHE.get(vehicle['id']) or {
+            'online': False,
+            'status': 'offline',
+            'error': '尚未完成状态探测',
+        }
+        config = sanitized_vehicle_config(vehicle)
         items.append({
-            'id': vehicle['id'],
-            'name': vehicle.get('name', vehicle['id']),
-            'ssh_host': vehicle.get('ssh_host', ''),
+            **config,
             'online': status['online'],
             'status': status['status'],
             'voltage': status.get('voltage'),
+            'battery': status.get('battery'),
+            'last_seen_at': status.get('last_seen_at'),
+            'checked_at': status.get('checked_at'),
             'error': status.get('error'),
         })
     return {
@@ -85,16 +206,23 @@ def _probe_vehicle_status(vehicle):
 
     try:
         status = _agent_json_request(vehicle, '/status')
+        checked_at = datetime.now().astimezone().isoformat(timespec='seconds')
         return {
             'online': bool(status.get('online')),
             'status': 'online' if status.get('online') else 'offline',
             'voltage': status.get('voltage'),
+            'battery': status.get('battery'),
+            'last_seen_at': checked_at,
+            'checked_at': checked_at,
         }
     except HTTPException as error:
+        checked_at = datetime.now().astimezone().isoformat(timespec='seconds')
         return {
             'online': False,
             'status': 'offline',
             'error': str(error.detail),
+            'last_seen_at': (_STATUS_CACHE.get(vehicle['id']) or {}).get('last_seen_at'),
+            'checked_at': checked_at,
         }
 
 
@@ -217,15 +345,22 @@ def get_vehicle_status(vehicle_id):
 
 
 def _camera_stream_url(vehicle, camera_role=None):
-    if camera_role == 'movement':
-        return vehicle.get('movement_camera_stream_url') or vehicle['camera_stream_url']
-    return vehicle['camera_stream_url']
+    role = camera_role or 'inspection'
+    configured_streams = vehicle.get('camera_streams') or {}
+    if configured_streams.get(role):
+        return configured_streams[role]
+    if role in {'movement', 'primary'}:
+        return vehicle.get('movement_camera_stream_url') or vehicle.get('camera_stream_url')
+    if role == 'inspection':
+        return vehicle.get('camera_stream_url')
+    return vehicle.get(f'{role}_camera_stream_url')
 
 
 def get_camera_info(vehicle_id, camera_role=None):
     """返回前端用的指定车辆摄像头流地址。"""
 
     vehicle = _resolve_vehicle(vehicle_id)
+    source_stream_url = _camera_stream_url(vehicle, camera_role)
     query = {'vehicle_id': vehicle['id']}
     if camera_role:
         query['camera_role'] = camera_role
@@ -233,8 +368,14 @@ def get_camera_info(vehicle_id, camera_role=None):
     return {
         'vehicle_id': vehicle['id'],
         'camera_role': camera_role or 'inspection',
-        'stream_url': stream_path,
-        'source_stream_url': _camera_stream_url(vehicle, camera_role),
+        'available_camera_roles': [
+            role
+            for role in ('movement', 'high', 'middle', 'low', 'ptz')
+            if _camera_stream_url(vehicle, role)
+        ],
+        'configured': bool(source_stream_url),
+        'stream_url': stream_path if source_stream_url else None,
+        'source_stream_url': source_stream_url,
         'cache': 'no-store',
     }
 
@@ -243,8 +384,14 @@ def open_camera_stream(vehicle_id, camera_role=None):
     """打开指定车辆摄像头 MJPEG 流，供 FastAPI 以同源代理方式转发。"""
 
     vehicle = _resolve_vehicle(vehicle_id)
+    source_stream_url = _camera_stream_url(vehicle, camera_role)
+    if not source_stream_url:
+        raise HTTPException(
+            status_code=404,
+            detail=f'车辆 {vehicle["id"]} 尚未配置摄像头角色：{camera_role or "inspection"}',
+        )
     request = Request(
-        _camera_stream_url(vehicle, camera_role),
+        source_stream_url,
         headers={
             'Accept': 'multipart/x-mixed-replace,image/*,*/*',
             'Cache-Control': 'no-cache',

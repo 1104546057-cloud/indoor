@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import backend.business_router as business_router_module  # noqa: E402
 import backend.main as main_module  # noqa: E402
+import backend.vehicle_client as vehicle_client_module  # noqa: E402
 from backend.database import Base, SessionLocal, engine, get_db  # noqa: E402
 from backend.inspection_service import evaluate_result  # noqa: E402
 from backend.main import app, get_current_user  # noqa: E402
@@ -80,6 +81,18 @@ def test_navigation_route_cancel_proxy(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()['navigation']['state'] == 'cancelled'
+
+
+def test_vehicle_camera_roles_resolve_only_configured_streams():
+    vehicle = {
+        'camera_stream_url': 'http://inspection-camera/',
+        'movement_camera_stream_url': 'http://movement-camera/',
+        'camera_streams': {'high': 'http://high-camera/'},
+    }
+    assert vehicle_client_module._camera_stream_url(vehicle, 'movement') == 'http://movement-camera/'
+    assert vehicle_client_module._camera_stream_url(vehicle, 'inspection') == 'http://inspection-camera/'
+    assert vehicle_client_module._camera_stream_url(vehicle, 'high') == 'http://high-camera/'
+    assert vehicle_client_module._camera_stream_url(vehicle, 'middle') is None
 
 
 def test_direct_task_route_is_persisted_and_archived_on_vehicle_completion(monkeypatch):
@@ -431,3 +444,199 @@ def test_system_user_and_audit_log_are_persisted():
     logs = client.get('/api/system/logs').json()['logs']
     assert any(log['action'] == '新增用户' and 'operator1' in log['content'] for log in logs)
     assert any(log['action'] == '更新用户' and 'operator1' in log['content'] for log in logs)
+
+
+def test_device_management_crud_visual_roi_and_controlled_delete():
+    client.post('/api/business/seed')
+    suffix = uuid4().hex[:8].upper()
+    room_code = f'ROOM-{suffix}'
+    room = client.post('/api/business/rooms', json={
+        'room_code': room_code,
+        'name': 'CRUD 测试电房',
+        'location': '实验楼测试区',
+        'is_active': True,
+    })
+    assert room.status_code == 200
+    room_id = room.json()['id']
+    updated_room = client.put(f'/api/business/rooms/{room_id}', json={
+        'room_code': room_code,
+        'name': 'CRUD 测试电房（已编辑）',
+        'location': '实验楼测试区二',
+        'is_active': True,
+    })
+    assert updated_room.status_code == 200
+    assert updated_room.json()['name'].endswith('（已编辑）')
+
+    cabinet_code = f'CAB-{suffix}'
+    cabinet = client.post('/api/business/cabinets', json={
+        'cabinet_code': cabinet_code,
+        'room_id': room_id,
+        'name': 'CRUD 测试电柜',
+        'location_x': 20,
+        'location_y': 30,
+        'is_active': True,
+    })
+    assert cabinet.status_code == 200
+    cabinet_id = cabinet.json()['id']
+    point = client.post('/api/business/points', json={
+        'point_code': f'POINT-{suffix}',
+        'room_id': room_id,
+        'cabinet_id': cabinet_id,
+        'name': 'CRUD 测试巡检点',
+        'x': 1.0,
+        'y': 2.0,
+    })
+    assert point.status_code == 200
+
+    item_code = f'ITEM-{suffix}'
+    item = client.post('/api/business/device-items', json={
+        'item_code': item_code,
+        'cabinet_id': cabinet_id,
+        'name': 'CRUD 测试电压表',
+        'item_type': 'value',
+        'unit': 'kV',
+        'recognition_type': 'meter',
+        'camera_role': 'high',
+        'inspection_point_id': point.json()['id'],
+        'reference_image_url': '/api/business/assets/example.png',
+        'roi_x': 10,
+        'roi_y': 15,
+        'roi_width': 30,
+        'roi_height': 35,
+        'is_active': True,
+    })
+    assert item.status_code == 200
+    item_id = item.json()['id']
+
+    rule = client.post('/api/business/threshold-rules', json={
+        'item_id': item_id,
+        'rule_name': 'CRUD 电压阈值',
+        'warning_min': 9.5,
+        'warning_max': 10.5,
+        'alarm_min': 9.0,
+        'alarm_max': 11.0,
+        'severity': '重要',
+        'is_active': True,
+    })
+    assert rule.status_code == 200
+    rule_id = rule.json()['id']
+
+    invalid_rule = client.put(f'/api/business/threshold-rules/{rule_id}', json={
+        'item_id': item_id,
+        'rule_name': '错误阈值',
+        'warning_min': 12,
+        'warning_max': 10,
+        'severity': '一般',
+        'is_active': True,
+    })
+    assert invalid_rule.status_code == 422
+
+    overview = client.get('/api/business/overview').json()
+    stored_item = next(entry for entry in overview['deviceItems'] if entry['id'] == item_id)
+    assert stored_item['cameraRole'] == 'high'
+    assert stored_item['inspectionPointId'] == point.json()['id']
+    assert stored_item['roi'] == [10.0, 15.0, 30.0, 35.0]
+    assert any(entry['id'] == rule_id for entry in overview['thresholdRules'])
+
+    blocked = client.delete(f'/api/business/cabinets/{cabinet_id}?hard=true')
+    assert blocked.status_code == 409
+    stopped = client.delete(f'/api/business/device-items/{item_id}')
+    assert stopped.status_code == 200
+    assert stopped.json()['active'] is False
+
+
+def test_device_asset_image_upload():
+    import base64
+
+    content = b'\x89PNG\r\n\x1a\nindoor-patrol-test'
+    response = client.post('/api/business/assets/image', json={
+        'filename': 'roi-test.png',
+        'data_url': f'data:image/png;base64,{base64.b64encode(content).decode()}',
+    })
+    assert response.status_code == 200
+    file_url = response.json()['fileUrl']
+    downloaded = client.get(file_url)
+    assert downloaded.status_code == 200
+    assert downloaded.content == content
+    (business_router_module.ASSET_DIRECTORY / file_url.rsplit('/', 1)[-1]).unlink(missing_ok=True)
+
+
+def test_vehicle_status_cache_includes_battery_and_last_seen(monkeypatch):
+    vehicle = {
+        'id': 'cache-test-vehicle',
+        'name': '缓存测试车',
+        'agent_base_url': 'http://vehicle-agent:9000',
+        'ssh_host': '192.168.1.50',
+        'camera_streams': {},
+    }
+    calls = []
+
+    def probe(_vehicle):
+        calls.append(_vehicle['id'])
+        return {
+            'online': True,
+            'status': 'online',
+            'battery': 76.5,
+            'voltage': 12.4,
+            'last_seen_at': '2026-08-01T12:00:00+08:00',
+            'checked_at': '2026-08-01T12:00:00+08:00',
+        }
+
+    monkeypatch.setattr(vehicle_client_module, '_VEHICLES', {vehicle['id']: vehicle})
+    monkeypatch.setattr(vehicle_client_module, '_DEFAULT_VEHICLE_ID', vehicle['id'])
+    monkeypatch.setattr(vehicle_client_module, '_probe_vehicle_status', probe)
+    vehicle_client_module._STATUS_CACHE.clear()
+    first = vehicle_client_module.list_vehicles()
+    second = vehicle_client_module.list_vehicles()
+    assert first['vehicles'][0]['battery'] == 76.5
+    assert first['vehicles'][0]['last_seen_at'] is not None
+    assert second['vehicles'][0]['battery'] == 76.5
+    assert calls == [vehicle['id']]
+
+
+def test_vehicle_registry_and_database_archive_are_updated_together(monkeypatch):
+    suffix = uuid4().hex[:8]
+    robot_code = f'vehicle-{suffix}'
+    registry = {}
+
+    def upsert(vehicle_id, values):
+        registry[vehicle_id] = {**registry.get(vehicle_id, {}), **values, 'id': vehicle_id}
+        return {key: value for key, value in registry[vehicle_id].items() if key != 'ssh_password'}
+
+    def remove(vehicle_id):
+        registry.pop(vehicle_id, None)
+
+    monkeypatch.setattr(business_router_module, 'upsert_vehicle_registry', upsert)
+    monkeypatch.setattr(business_router_module, 'remove_vehicle_registry', remove)
+
+    created = client.post('/api/business/robots', json={
+        'robot_code': robot_code,
+        'name': '车辆档案测试车',
+        'agent_base_url': 'http://192.168.31.250:9000',
+        'ssh_host': '192.168.31.250',
+        'ssh_port': 22,
+        'ssh_username': 'nano',
+        'ssh_password': 'secret',
+        'camera_streams': {'movement': 'http://192.168.31.250:8080/video'},
+        'is_active': True,
+    })
+    assert created.status_code == 200
+    robot_id = created.json()['id']
+    assert created.json()['robotCode'] == robot_code
+    assert registry[robot_code]['camera_streams']['movement'].endswith('/video')
+
+    updated = client.put(f'/api/business/robots/{robot_id}', json={
+        'robot_code': robot_code,
+        'name': '车辆档案测试车（已编辑）',
+        'agent_base_url': 'http://192.168.31.251:9000',
+        'ssh_host': '192.168.31.251',
+        'camera_streams': {'high': 'http://192.168.31.251:8081/video'},
+        'is_active': True,
+    })
+    assert updated.status_code == 200
+    assert updated.json()['name'].endswith('（已编辑）')
+    assert registry[robot_code]['agent_base_url'].endswith(':9000')
+
+    deleted = client.delete(f'/api/business/robots/{robot_id}?hard=true')
+    assert deleted.status_code == 200
+    assert robot_code not in registry

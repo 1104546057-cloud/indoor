@@ -8,6 +8,10 @@
       "agent_base_url": "http://10.178.84.10:9000",
       "movement_camera_stream_url": "http://10.178.84.10:8080/",
       "camera_stream_url": "http://10.178.84.11:8080/",
+      "camera_streams": {
+        "movement": "http://10.178.84.10:8080/",
+        "high": "http://10.178.84.11:8080/"
+      },
       "ssh_host": "10.178.84.10",
       "ssh_port": 22,
       "ssh_username": "nano1",

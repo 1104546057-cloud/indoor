@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -33,6 +35,7 @@ try:
         InspectionTask,
         InspectionTaskRoutePoint,
         RecognitionResult,
+        Robot,
         SystemLog,
         User,
     )
@@ -77,6 +80,7 @@ except ImportError:
         InspectionTask,
         InspectionTaskRoutePoint,
         RecognitionResult,
+        Robot,
         SystemLog,
         User,
     )
@@ -874,9 +878,38 @@ def review_recognition_result(
 
 
 @app.get("/api/vehicles")
-def vehicles(current_user: User = Depends(get_current_user)):
-    # 前端用这个接口拉取可选车辆列表，渲染车辆选择下拉框。
-    return list_vehicles()
+def vehicles(
+    force_refresh: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # 连接注册表负责网络参数，Robot 表负责业务档案和最近心跳；每次读取时进行幂等同步。
+    payload = list_vehicles(force_refresh=force_refresh)
+    for vehicle in payload.get('vehicles', []):
+        robot = db.query(Robot).filter(Robot.robot_code == vehicle['id']).first()
+        if robot is None:
+            robot = Robot(robot_code=vehicle['id'], name=vehicle['name'])
+            db.add(robot)
+        robot.name = vehicle['name']
+        robot.adapter_mode = 'real'
+        robot.online = bool(vehicle.get('online'))
+        robot.status = 'online' if robot.online else 'offline'
+        robot.agent_base_url = vehicle.get('agent_base_url')
+        robot.ssh_host = vehicle.get('ssh_host')
+        robot.camera_roles = vehicle.get('camera_roles') or []
+        robot.last_error = vehicle.get('error')
+        if vehicle.get('battery') is not None:
+            robot.battery = vehicle['battery']
+        if vehicle.get('voltage') is not None:
+            robot.voltage = vehicle['voltage']
+        if vehicle.get('last_seen_at'):
+            parsed = datetime.fromisoformat(vehicle['last_seen_at'])
+            robot.last_seen_at = parsed.replace(tzinfo=None)
+        db.flush()
+        vehicle['db_id'] = robot.id
+        vehicle['active'] = robot.is_active
+    db.commit()
+    return payload
 
 
 @app.get("/api/vehicle/status")

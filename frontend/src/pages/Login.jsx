@@ -105,7 +105,7 @@ function Login() {
         <span className="title-line left" />
         <div>
           <small>INDOOR PATROL ROBOT CONTROL</small>
-          <h1>室内巡检无人车管理平台</h1>
+          <h1>电房设备智能巡检管理平台</h1>
         </div>
         <span className="title-line right" />
       </header>

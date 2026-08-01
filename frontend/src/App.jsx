@@ -6,7 +6,7 @@ import Login from './pages/Login'
 
 const ClusterControl = lazy(() => import('./pages/ClusterControl'))
 const ClusterManagement = lazy(() => import('./pages/ClusterManagement'))
-const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Dashboard = lazy(() => import('./pages/SchoolFleetDashboard'))
 const DeviceControl = lazy(() => import('./pages/DeviceControl'))
 const DeviceManagement = lazy(() => import('./pages/DeviceManagement'))
 const PatrolExecution3D = lazy(() => import('./pages/PatrolExecution3D'))

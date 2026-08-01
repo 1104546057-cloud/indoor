@@ -140,7 +140,7 @@ function MainLayout() {
           <span className="brand-wing left" />
           <div className="brand-title-wrap">
             <span className="brand-kicker">INDOOR PATROL CONTROL</span>
-            <strong>室内巡检无人车管理平台</strong>
+            <strong>电房设备智能巡检管理平台</strong>
           </div>
           <span className="brand-wing right" />
         </div>

@@ -3,6 +3,7 @@ export const emptyBusinessOverview = Object.freeze({
   cabinetTypes: [],
   cabinets: [],
   deviceItems: [],
+  thresholdRules: [],
   robots: [],
   points: [],
   routes: [],

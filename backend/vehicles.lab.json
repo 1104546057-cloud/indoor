@@ -8,6 +8,10 @@
       "agent_base_url": "http://192.168.31.139:9000",
       "movement_camera_stream_url": "http://192.168.31.139:8080/",
       "camera_stream_url": "http://192.168.31.200:8080/",
+      "camera_streams": {
+        "movement": "http://192.168.31.139:8080/",
+        "high": "http://192.168.31.200:8080/"
+      },
       "ssh_host": "192.168.31.139",
       "ssh_port": 22,
       "ssh_username": "nano1",

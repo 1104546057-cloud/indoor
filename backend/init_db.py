@@ -161,6 +161,41 @@ def migrate_legacy_schema():
             print(f'Added foreign key: {constraint_name}')
 
 
+def migrate_device_management_schema():
+    """为未使用 Alembic 的旧部署补齐设备管理新增字段。"""
+
+    definitions = {
+        'tb_device_item': {
+            'recognition_type': 'VARCHAR(50) NULL',
+            'camera_role': 'VARCHAR(30) NULL',
+            'reference_image_url': 'VARCHAR(500) NULL',
+            'inspection_point_id': 'INT NULL',
+        },
+        'tb_robot': {
+            'agent_base_url': 'VARCHAR(500) NULL',
+            'ssh_host': 'VARCHAR(160) NULL',
+            'camera_roles': 'JSON NULL',
+            'voltage': 'FLOAT NULL',
+            'last_seen_at': 'DATETIME NULL',
+            'last_error': 'VARCHAR(500) NULL',
+            'is_active': 'BOOLEAN NOT NULL DEFAULT TRUE',
+        },
+    }
+    with engine.begin() as connection:
+        for table_name, columns in definitions.items():
+            schema = inspect(connection)
+            if not schema.has_table(table_name):
+                continue
+            existing = {column['name'] for column in schema.get_columns(table_name)}
+            for column_name, definition in columns.items():
+                if column_name in existing:
+                    continue
+                connection.execute(text(
+                    f'ALTER TABLE `{table_name}` ADD COLUMN `{column_name}` {definition}'
+                ))
+                print(f'Added column: {table_name}.{column_name}')
+
+
 def create_admin_user():
     """创建或更新默认管理员账号。"""
 
@@ -202,6 +237,7 @@ def init_database():
         ensure_database_exists()
         create_tables()
         migrate_legacy_schema()
+        migrate_device_management_schema()
         create_admin_user()
         print('Database initialized successfully.')
     except OperationalError as error:

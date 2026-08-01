@@ -9,6 +9,13 @@
       "navigation_route_path": "/navigation_route",
       "navigation_goal_path": "/navigation_goal",
       "camera_stream_url": "http://192.168.31.139:8080/",
+      "camera_streams": {
+        "movement": "http://192.168.31.139:8080/",
+        "high": "http://192.168.31.139:8081/",
+        "middle": "http://192.168.31.139:8082/",
+        "low": "http://192.168.31.139:8083/",
+        "ptz": "http://192.168.31.139:8084/"
+      },
       "lidar_ws_url": "ws://192.168.31.139:8090/ws/lidar",
       "lidar_topic": "/lidar/scan",
       "ssh_host": "192.168.31.139",
@@ -24,6 +31,13 @@
       "navigation_route_path": "/navigation_route",
       "navigation_goal_path": "/navigation_goal",
       "camera_stream_url": "http://192.168.31.80:8080/",
+      "camera_streams": {
+        "movement": "http://192.168.31.80:8080/",
+        "high": "http://192.168.31.80:8081/",
+        "middle": "http://192.168.31.80:8082/",
+        "low": "http://192.168.31.80:8083/",
+        "ptz": "http://192.168.31.80:8084/"
+      },
       "lidar_ws_url": "ws://192.168.31.80:8090/ws/lidar",
       "lidar_topic": "/lidar/scan",
       "ssh_host": "192.168.31.80",
@@ -39,6 +53,13 @@
       "navigation_route_path": "/navigation_route",
       "navigation_goal_path": "/navigation_goal",
       "camera_stream_url": "http://192.168.31.178:8080/",
+      "camera_streams": {
+        "movement": "http://192.168.31.178:8080/",
+        "high": "http://192.168.31.178:8081/",
+        "middle": "http://192.168.31.178:8082/",
+        "low": "http://192.168.31.178:8083/",
+        "ptz": "http://192.168.31.178:8084/"
+      },
       "lidar_ws_url": "ws://192.168.31.178:8090/ws/lidar",
       "lidar_topic": "/lidar/scan",
       "ssh_host": "192.168.31.178",

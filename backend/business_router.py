@@ -1,8 +1,14 @@
+from __future__ import annotations
+
+import base64
+import binascii
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, selectinload
 
@@ -28,7 +34,7 @@ try:
         ThresholdRule,
     )
     from .navigation_workflow import begin_route_execution, navigation_execution_id, start_route_monitor
-    from .vehicle_client import send_navigation_route
+    from .vehicle_client import remove_vehicle_registry, send_navigation_route, upsert_vehicle_registry
 except ImportError:
     from database import get_db
     from models import (
@@ -51,42 +57,86 @@ except ImportError:
         ThresholdRule,
     )
     from navigation_workflow import begin_route_execution, navigation_execution_id, start_route_monitor
-    from vehicle_client import send_navigation_route
+    from vehicle_client import remove_vehicle_registry, send_navigation_route, upsert_vehicle_registry
+
+
+ASSET_DIRECTORY = Path(__file__).with_name('uploads') / 'device_assets'
+VALID_ITEM_TYPES = {'value', 'lamp', 'handle', 'switch', 'temperature', 'text'}
+VALID_CAMERA_ROLES = {'movement', 'high', 'middle', 'low', 'ptz'}
+VALID_SEVERITIES = {'提示', '一般', '重要', '紧急'}
 
 
 class RoomPayload(BaseModel):
-    room_code: str
-    name: str
+    room_code: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=160)
     location: str | None = None
     floor_plan_url: str | None = None
     description: str | None = None
+    is_active: bool = True
 
 
 class CabinetPayload(BaseModel):
-    cabinet_code: str
+    cabinet_code: str = Field(min_length=1, max_length=80)
     room_id: int
     cabinet_type_id: int | None = None
-    name: str
-    location_x: float | None = None
-    location_y: float | None = None
+    name: str = Field(min_length=1, max_length=160)
+    location_x: float | None = Field(default=None, ge=0, le=100)
+    location_y: float | None = Field(default=None, ge=0, le=100)
     photo_url: str | None = None
+    description: str | None = None
+    is_active: bool = True
 
 
 class DeviceItemPayload(BaseModel):
-    item_code: str
+    item_code: str = Field(min_length=1, max_length=80)
     cabinet_id: int
-    name: str
+    name: str = Field(min_length=1, max_length=160)
     item_type: str
     unit: str | None = None
     expected_state: str | None = None
-    roi_x: float | None = None
-    roi_y: float | None = None
-    roi_width: float | None = None
-    roi_height: float | None = None
+    roi_x: float | None = Field(default=None, ge=0, le=100)
+    roi_y: float | None = Field(default=None, ge=0, le=100)
+    roi_width: float | None = Field(default=None, gt=0, le=100)
+    roi_height: float | None = Field(default=None, gt=0, le=100)
+    recognition_type: str | None = None
+    camera_role: str | None = None
+    reference_image_url: str | None = None
+    inspection_point_id: int | None = None
+    is_active: bool = True
     warning_min: float | None = None
     warning_max: float | None = None
     alarm_min: float | None = None
     alarm_max: float | None = None
+
+
+class ThresholdPayload(BaseModel):
+    item_id: int
+    rule_name: str = Field(min_length=1, max_length=160)
+    warning_min: float | None = None
+    warning_max: float | None = None
+    alarm_min: float | None = None
+    alarm_max: float | None = None
+    expected_state: str | None = None
+    severity: str = '一般'
+    is_active: bool = True
+
+
+class VehicleRegistryPayload(BaseModel):
+    robot_code: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=160)
+    agent_base_url: str = Field(min_length=1, max_length=500)
+    ssh_host: str | None = None
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    ssh_username: str | None = None
+    ssh_password: str | None = None
+    start_script: str | None = None
+    camera_streams: dict[str, str] = Field(default_factory=dict)
+    is_active: bool = True
+
+
+class ImageAssetPayload(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    data_url: str = Field(min_length=20)
 
 
 class PointPayload(BaseModel):
@@ -132,6 +182,62 @@ class TaskStatusPayload(BaseModel):
     battery: float | None = None
 
 
+def _require_admin(current_user) -> None:
+    if getattr(current_user, 'role', None) != 'admin':
+        raise HTTPException(status_code=403, detail='只有管理员可以维护设备主数据')
+
+
+def _validate_item_payload(payload: DeviceItemPayload, db: Session) -> None:
+    if payload.item_type not in VALID_ITEM_TYPES:
+        raise HTTPException(status_code=422, detail='不支持的监测对象类型')
+    if payload.camera_role and payload.camera_role not in VALID_CAMERA_ROLES:
+        raise HTTPException(status_code=422, detail='不支持的摄像头角色')
+    roi = (payload.roi_x, payload.roi_y, payload.roi_width, payload.roi_height)
+    if any(value is not None for value in roi) and not all(value is not None for value in roi):
+        raise HTTPException(status_code=422, detail='ROI 的 X、Y、宽度和高度必须同时填写')
+    if all(value is not None for value in roi):
+        if payload.roi_x + payload.roi_width > 100 or payload.roi_y + payload.roi_height > 100:
+            raise HTTPException(status_code=422, detail='ROI 必须位于图片范围内')
+    if payload.inspection_point_id is not None:
+        point = db.get(InspectionPoint, payload.inspection_point_id)
+        if point is None:
+            raise HTTPException(status_code=404, detail='绑定巡检点不存在')
+        cabinet = db.get(Cabinet, payload.cabinet_id)
+        if cabinet and (point.cabinet_id not in {None, cabinet.id} or point.room_id != cabinet.room_id):
+            raise HTTPException(status_code=422, detail='巡检点与监测对象所属电柜不一致')
+
+
+def _validate_threshold_values(values: dict) -> None:
+    severity = values.get('severity', '一般')
+    if severity not in VALID_SEVERITIES:
+        raise HTTPException(status_code=422, detail='不支持的告警等级')
+    warning_min, warning_max = values.get('warning_min'), values.get('warning_max')
+    alarm_min, alarm_max = values.get('alarm_min'), values.get('alarm_max')
+    if warning_min is not None and warning_max is not None and warning_min >= warning_max:
+        raise HTTPException(status_code=422, detail='预警下限必须小于预警上限')
+    if alarm_min is not None and alarm_max is not None and alarm_min >= alarm_max:
+        raise HTTPException(status_code=422, detail='告警下限必须小于告警上限')
+    if alarm_min is not None and warning_min is not None and alarm_min > warning_min:
+        raise HTTPException(status_code=422, detail='告警下限应小于或等于预警下限')
+    if alarm_max is not None and warning_max is not None and alarm_max < warning_max:
+        raise HTTPException(status_code=422, detail='告警上限应大于或等于预警上限')
+
+
+def _threshold_json(rule: ThresholdRule) -> dict:
+    return {
+        'id': rule.id,
+        'itemId': rule.item_id,
+        'ruleName': rule.rule_name,
+        'warningMin': rule.warning_min,
+        'warningMax': rule.warning_max,
+        'alarmMin': rule.alarm_min,
+        'alarmMax': rule.alarm_max,
+        'expectedState': rule.expected_state,
+        'severity': rule.severity,
+        'active': rule.is_active,
+    }
+
+
 def _room_json(room: Room) -> dict:
     return {
         'id': room.id,
@@ -154,12 +260,14 @@ def _cabinet_json(cabinet: Cabinet) -> dict:
         'locationX': cabinet.location_x,
         'locationY': cabinet.location_y,
         'photoUrl': cabinet.photo_url,
+        'description': cabinet.description,
         'active': cabinet.is_active,
     }
 
 
 def _item_json(item: DeviceItem) -> dict:
-    rule = item.threshold_rules[0] if item.threshold_rules else None
+    rules = sorted(item.threshold_rules, key=lambda candidate: candidate.id)
+    rule = next((candidate for candidate in rules if candidate.is_active), rules[0] if rules else None)
     return {
         'id': item.id,
         'itemCode': item.item_code,
@@ -168,15 +276,14 @@ def _item_json(item: DeviceItem) -> dict:
         'itemType': item.item_type,
         'unit': item.unit,
         'expectedState': item.expected_state,
+        'recognitionType': item.recognition_type,
+        'cameraRole': item.camera_role,
+        'referenceImageUrl': item.reference_image_url,
+        'inspectionPointId': item.inspection_point_id,
         'roi': [item.roi_x, item.roi_y, item.roi_width, item.roi_height],
-        'threshold': {
-            'warningMin': rule.warning_min,
-            'warningMax': rule.warning_max,
-            'alarmMin': rule.alarm_min,
-            'alarmMax': rule.alarm_max,
-            'expectedState': rule.expected_state,
-            'severity': rule.severity,
-        } if rule else None,
+        'threshold': _threshold_json(rule) if rule else None,
+        'thresholds': [_threshold_json(candidate) for candidate in rules],
+        'active': item.is_active,
     }
 
 
@@ -192,6 +299,7 @@ def _point_json(point: InspectionPoint) -> dict:
         'yaw': point.yaw,
         'cameraPan': point.camera_pan,
         'cameraTilt': point.camera_tilt,
+        'active': point.is_active,
     }
 
 
@@ -202,6 +310,7 @@ def _route_json(route: Route) -> dict:
         'roomId': route.room_id,
         'name': route.name,
         'description': route.description,
+        'active': route.is_active,
         'points': [
             {**_point_json(detail.point), 'sequence': detail.sequence, 'dwellSeconds': detail.dwell_seconds}
             for detail in route.details
@@ -218,6 +327,13 @@ def _robot_json(robot: Robot) -> dict:
         'status': robot.status,
         'online': robot.online,
         'battery': robot.battery,
+        'voltage': robot.voltage,
+        'agentBaseUrl': robot.agent_base_url,
+        'sshHost': robot.ssh_host,
+        'cameraRoles': robot.camera_roles or [],
+        'lastSeenAt': robot.last_seen_at.isoformat(sep=' ') if robot.last_seen_at else None,
+        'lastError': robot.last_error,
+        'active': robot.is_active,
         'position': {'x': robot.position_x, 'y': robot.position_y, 'yaw': robot.yaw},
     }
 
@@ -399,6 +515,10 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
             ],
             'cabinets': [_cabinet_json(item) for item in db.query(Cabinet).order_by(Cabinet.id).all()],
             'deviceItems': [_item_json(item) for item in items],
+            'thresholdRules': [
+                _threshold_json(item)
+                for item in db.query(ThresholdRule).order_by(ThresholdRule.id).all()
+            ],
             'robots': [_robot_json(item) for item in db.query(Robot).order_by(Robot.id).all()],
             'points': [_point_json(item) for item in db.query(InspectionPoint).order_by(InspectionPoint.id).all()],
             'routes': [_route_json(item) for item in routes],
@@ -415,6 +535,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
                     'createdBy': record.task.created_by if record.task else None,
                     'routeName': record.route.name if record.route else None,
                     'robotName': record.robot.name if record.robot else None,
+                    'robotCode': record.robot.robot_code if record.robot else None,
                     'status': record.status,
                     'progress': record.progress,
                     'currentSequence': record.current_sequence,
@@ -488,10 +609,12 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/seed')
     def seed(current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
         return seed_standard_data(db)
 
     @router.post('/rooms')
     def create_room(payload: RoomPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
         if db.query(Room).filter(Room.room_code == payload.room_code).first():
             raise HTTPException(status_code=409, detail='电房编码已存在')
         room = Room(**payload.model_dump())
@@ -501,8 +624,49 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         db.refresh(room)
         return _room_json(room)
 
+    @router.put('/rooms/{room_id}')
+    def update_room(room_id: int, payload: RoomPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        room = db.get(Room, room_id)
+        if room is None:
+            raise HTTPException(status_code=404, detail='电房不存在')
+        duplicate = db.query(Room).filter(Room.room_code == payload.room_code, Room.id != room_id).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail='电房编码已存在')
+        for key, value in payload.model_dump().items():
+            setattr(room, key, value)
+        _add_system_log(db, current_user, '设备管理', '编辑电房', f'{payload.room_code} {payload.name}')
+        db.commit()
+        db.refresh(room)
+        return _room_json(room)
+
+    @router.delete('/rooms/{room_id}')
+    def delete_room(room_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        room = db.get(Room, room_id)
+        if room is None:
+            raise HTTPException(status_code=404, detail='电房不存在')
+        if hard:
+            counts = {
+                '电柜': db.query(Cabinet).filter(Cabinet.room_id == room_id).count(),
+                '巡检点': db.query(InspectionPoint).filter(InspectionPoint.room_id == room_id).count(),
+                '路线': db.query(Route).filter(Route.room_id == room_id).count(),
+            }
+            dependencies = '、'.join(f'{name}{count}项' for name, count in counts.items() if count)
+            if dependencies:
+                raise HTTPException(status_code=409, detail=f'电房仍关联{dependencies}，请先解除关联')
+            db.delete(room)
+            action = '删除电房'
+        else:
+            room.is_active = False
+            action = '停用电房'
+        _add_system_log(db, current_user, '设备管理', action, f'{room.room_code} {room.name}')
+        db.commit()
+        return {'id': room_id, 'deleted': hard, 'active': False}
+
     @router.post('/cabinets')
     def create_cabinet(payload: CabinetPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
         if db.query(Cabinet).filter(Cabinet.cabinet_code == payload.cabinet_code).first():
             raise HTTPException(status_code=409, detail='电柜编码已存在')
         if db.get(Room, payload.room_id) is None:
@@ -514,14 +678,62 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         db.refresh(cabinet)
         return _cabinet_json(cabinet)
 
+    @router.put('/cabinets/{cabinet_id}')
+    def update_cabinet(cabinet_id: int, payload: CabinetPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        cabinet = db.get(Cabinet, cabinet_id)
+        if cabinet is None:
+            raise HTTPException(status_code=404, detail='电柜不存在')
+        if db.get(Room, payload.room_id) is None:
+            raise HTTPException(status_code=404, detail='所属电房不存在')
+        duplicate = db.query(Cabinet).filter(
+            Cabinet.cabinet_code == payload.cabinet_code,
+            Cabinet.id != cabinet_id,
+        ).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail='电柜编码已存在')
+        for key, value in payload.model_dump().items():
+            setattr(cabinet, key, value)
+        _add_system_log(db, current_user, '设备管理', '编辑电柜', f'{payload.cabinet_code} {payload.name}')
+        db.commit()
+        db.refresh(cabinet)
+        return _cabinet_json(cabinet)
+
+    @router.delete('/cabinets/{cabinet_id}')
+    def delete_cabinet(cabinet_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        cabinet = db.get(Cabinet, cabinet_id)
+        if cabinet is None:
+            raise HTTPException(status_code=404, detail='电柜不存在')
+        if hard:
+            counts = {
+                '监测对象': db.query(DeviceItem).filter(DeviceItem.cabinet_id == cabinet_id).count(),
+                '巡检点': db.query(InspectionPoint).filter(InspectionPoint.cabinet_id == cabinet_id).count(),
+                '现场图片': db.query(ImageRecord).filter(ImageRecord.cabinet_id == cabinet_id).count(),
+            }
+            dependencies = '、'.join(f'{name}{count}项' for name, count in counts.items() if count)
+            if dependencies:
+                raise HTTPException(status_code=409, detail=f'电柜仍关联{dependencies}，请先解除关联')
+            db.delete(cabinet)
+            action = '删除电柜'
+        else:
+            cabinet.is_active = False
+            action = '停用电柜'
+        _add_system_log(db, current_user, '设备管理', action, f'{cabinet.cabinet_code} {cabinet.name}')
+        db.commit()
+        return {'id': cabinet_id, 'deleted': hard, 'active': False}
+
     @router.post('/device-items')
     def create_device_item(payload: DeviceItemPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
         if db.query(DeviceItem).filter(DeviceItem.item_code == payload.item_code).first():
             raise HTTPException(status_code=409, detail='监测对象编码已存在')
         if db.get(Cabinet, payload.cabinet_id) is None:
             raise HTTPException(status_code=404, detail='所属电柜不存在')
+        _validate_item_payload(payload, db)
         values = payload.model_dump()
         rule_values = {key: values.pop(key) for key in ['warning_min', 'warning_max', 'alarm_min', 'alarm_max']}
+        _validate_threshold_values(rule_values)
         item = DeviceItem(**values)
         db.add(item)
         db.flush()
@@ -536,6 +748,211 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         db.commit()
         db.refresh(item)
         return {'id': item.id, 'itemCode': item.item_code}
+
+    @router.put('/device-items/{item_id}')
+    def update_device_item(item_id: int, payload: DeviceItemPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        item = db.get(DeviceItem, item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail='监测对象不存在')
+        if db.get(Cabinet, payload.cabinet_id) is None:
+            raise HTTPException(status_code=404, detail='所属电柜不存在')
+        duplicate = db.query(DeviceItem).filter(
+            DeviceItem.item_code == payload.item_code,
+            DeviceItem.id != item_id,
+        ).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail='监测对象编码已存在')
+        _validate_item_payload(payload, db)
+        values = payload.model_dump()
+        for key in ['warning_min', 'warning_max', 'alarm_min', 'alarm_max']:
+            values.pop(key)
+        for key, value in values.items():
+            setattr(item, key, value)
+        _add_system_log(db, current_user, '设备管理', '编辑监测对象', f'{payload.item_code} {payload.name}')
+        db.commit()
+        refreshed = db.query(DeviceItem).options(selectinload(DeviceItem.threshold_rules)).filter(DeviceItem.id == item_id).one()
+        return _item_json(refreshed)
+
+    @router.delete('/device-items/{item_id}')
+    def delete_device_item(item_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        item = db.get(DeviceItem, item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail='监测对象不存在')
+        if hard:
+            result_count = db.query(RecognitionResult).filter(RecognitionResult.device_item_id == item_id).count()
+            alarm_count = db.query(Alarm).filter(Alarm.item_id == item_id).count()
+            if result_count or alarm_count:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'监测对象仍关联识别结果{result_count}项、告警{alarm_count}项，只允许停用',
+                )
+            db.delete(item)
+            action = '删除监测对象'
+        else:
+            item.is_active = False
+            action = '停用监测对象'
+        _add_system_log(db, current_user, '设备管理', action, f'{item.item_code} {item.name}')
+        db.commit()
+        return {'id': item_id, 'deleted': hard, 'active': False}
+
+    @router.post('/threshold-rules')
+    def create_threshold(payload: ThresholdPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        if db.get(DeviceItem, payload.item_id) is None:
+            raise HTTPException(status_code=404, detail='监测对象不存在')
+        values = payload.model_dump()
+        _validate_threshold_values(values)
+        rule = ThresholdRule(**values)
+        db.add(rule)
+        _add_system_log(db, current_user, '设备管理', '新增阈值规则', payload.rule_name)
+        db.commit()
+        db.refresh(rule)
+        return _threshold_json(rule)
+
+    @router.put('/threshold-rules/{rule_id}')
+    def update_threshold(rule_id: int, payload: ThresholdPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        rule = db.get(ThresholdRule, rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail='阈值规则不存在')
+        if db.get(DeviceItem, payload.item_id) is None:
+            raise HTTPException(status_code=404, detail='监测对象不存在')
+        values = payload.model_dump()
+        _validate_threshold_values(values)
+        for key, value in values.items():
+            setattr(rule, key, value)
+        _add_system_log(db, current_user, '设备管理', '编辑阈值规则', payload.rule_name)
+        db.commit()
+        db.refresh(rule)
+        return _threshold_json(rule)
+
+    @router.delete('/threshold-rules/{rule_id}')
+    def delete_threshold(rule_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        rule = db.get(ThresholdRule, rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail='阈值规则不存在')
+        if hard:
+            db.delete(rule)
+            action = '删除阈值规则'
+        else:
+            rule.is_active = False
+            action = '停用阈值规则'
+        _add_system_log(db, current_user, '设备管理', action, rule.rule_name)
+        db.commit()
+        return {'id': rule_id, 'deleted': hard, 'active': False}
+
+    @router.post('/assets/image')
+    def upload_asset_image(payload: ImageAssetPayload, current_user=auth):
+        _require_admin(current_user)
+        if ',' not in payload.data_url:
+            raise HTTPException(status_code=422, detail='图片数据格式错误')
+        header, encoded = payload.data_url.split(',', 1)
+        mime_extensions = {
+            'data:image/png;base64': '.png',
+            'data:image/jpeg;base64': '.jpg',
+            'data:image/webp;base64': '.webp',
+        }
+        extension = mime_extensions.get(header.lower())
+        if extension is None:
+            raise HTTPException(status_code=422, detail='仅支持 PNG、JPEG 和 WebP 图片')
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise HTTPException(status_code=422, detail='图片 Base64 数据无效') from error
+        if len(content) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail='图片不能超过 5 MB')
+        ASSET_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        asset_name = f'{uuid4().hex}{extension}'
+        (ASSET_DIRECTORY / asset_name).write_bytes(content)
+        return {'fileUrl': f'/api/business/assets/{asset_name}', 'filename': payload.filename}
+
+    @router.get('/assets/{asset_name}')
+    def read_asset_image(asset_name: str, current_user=auth):
+        safe_name = Path(asset_name).name
+        path = ASSET_DIRECTORY / safe_name
+        if safe_name != asset_name or not path.is_file():
+            raise HTTPException(status_code=404, detail='图片不存在')
+        return FileResponse(path)
+
+    def vehicle_registry_values(payload: VehicleRegistryPayload) -> dict:
+        invalid_roles = set(payload.camera_streams) - VALID_CAMERA_ROLES
+        if invalid_roles:
+            raise HTTPException(status_code=422, detail=f'不支持的摄像头角色：{", ".join(sorted(invalid_roles))}')
+        return {
+            'name': payload.name,
+            'agent_base_url': payload.agent_base_url,
+            'ssh_host': payload.ssh_host,
+            'ssh_port': payload.ssh_port,
+            'ssh_username': payload.ssh_username,
+            'ssh_password': payload.ssh_password,
+            'start_script': payload.start_script,
+            'camera_streams': payload.camera_streams,
+        }
+
+    def apply_vehicle_payload(robot: Robot, payload: VehicleRegistryPayload) -> None:
+        robot.robot_code = payload.robot_code
+        robot.name = payload.name
+        robot.adapter_mode = 'real'
+        robot.agent_base_url = payload.agent_base_url
+        robot.ssh_host = payload.ssh_host
+        robot.camera_roles = list(payload.camera_streams)
+        robot.is_active = payload.is_active
+
+    @router.post('/robots')
+    def create_robot(payload: VehicleRegistryPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        if db.query(Robot).filter(Robot.robot_code == payload.robot_code).first():
+            raise HTTPException(status_code=409, detail='车辆编号已存在')
+        config = upsert_vehicle_registry(payload.robot_code, vehicle_registry_values(payload))
+        robot = Robot(robot_code=payload.robot_code, name=payload.name)
+        apply_vehicle_payload(robot, payload)
+        db.add(robot)
+        _add_system_log(db, current_user, '设备管理', '注册车辆', f'{payload.robot_code} {payload.name}')
+        db.commit()
+        db.refresh(robot)
+        return {**_robot_json(robot), 'registry': config}
+
+    @router.put('/robots/{robot_id}')
+    def update_robot(robot_id: int, payload: VehicleRegistryPayload, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        robot = db.get(Robot, robot_id)
+        if robot is None:
+            raise HTTPException(status_code=404, detail='车辆档案不存在')
+        if payload.robot_code != robot.robot_code:
+            raise HTTPException(status_code=422, detail='车辆编号建立后不可修改')
+        config = upsert_vehicle_registry(payload.robot_code, vehicle_registry_values(payload))
+        apply_vehicle_payload(robot, payload)
+        _add_system_log(db, current_user, '设备管理', '编辑车辆', f'{payload.robot_code} {payload.name}')
+        db.commit()
+        db.refresh(robot)
+        return {**_robot_json(robot), 'registry': config}
+
+    @router.delete('/robots/{robot_id}')
+    def delete_robot(robot_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
+        _require_admin(current_user)
+        robot = db.get(Robot, robot_id)
+        if robot is None:
+            raise HTTPException(status_code=404, detail='车辆档案不存在')
+        if hard:
+            records = db.query(InspectionRecord).filter(InspectionRecord.robot_id == robot_id).count()
+            tasks = db.query(InspectionTask).filter(InspectionTask.robot == robot.robot_code).count()
+            if records or tasks:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'车辆仍关联巡检记录{records}项、任务{tasks}项，只允许停用',
+                )
+            remove_vehicle_registry(robot.robot_code)
+            db.delete(robot)
+            action = '删除车辆'
+        else:
+            robot.is_active = False
+            action = '停用车辆'
+        _add_system_log(db, current_user, '设备管理', action, f'{robot.robot_code} {robot.name}')
+        db.commit()
+        return {'id': robot_id, 'deleted': hard, 'active': False}
 
     @router.post('/points')
     def create_point(payload: PointPayload, current_user=auth, db: Session = Depends(get_db)):

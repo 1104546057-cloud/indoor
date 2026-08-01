@@ -5,6 +5,8 @@ reached.  This module mirrors that state into the business database so route
 completion does not depend on a browser tab staying open.
 """
 
+from __future__ import annotations
+
 import os
 import threading
 import time

@@ -131,7 +131,7 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 118px minmax(0, 1fr) 190px;
+  grid-template-rows: 118px 42px minmax(0, 1fr) 190px;
   gap: 14px;
 }
 
@@ -141,6 +141,12 @@
   left: 12px;
   right: 12px;
   top: 112px;
+}
+
+.device-main:has(.business-resource-manager),
+.device-main:has(.vehicle-registry-manager),
+.device-main:has(.business-module-loading) {
+  grid-template-rows: 118px minmax(0, 1fr);
 }
 
 .device-stat-grid {
@@ -718,4 +724,52 @@ button.device-row.selected {
   .bound-points > div {
     grid-template-columns: 1fr;
   }
+}
+
+/* 设备总览检索与车辆注册 */
+.device-overview-toolbar { display: grid; grid-template-columns: minmax(280px, 1fr) 190px 72px; gap: 9px; align-items: center; }
+.device-overview-toolbar input,
+.device-overview-toolbar select,
+.device-overview-toolbar button { min-width: 0; min-height: 36px; padding: 0 11px; color: #dcf9fc; border: 1px solid rgba(158, 223, 234, .22); background: rgba(5, 37, 51, .8); font-size: 12px; }
+.device-table { grid-template-rows: auto minmax(0, 1fr) 36px; }
+.dm-status { display: inline-grid; place-items: center; min-width: 48px; min-height: 25px; padding: 2px 7px; border: 1px solid rgba(158, 223, 234, .22); font-size: 11px; }
+.dm-status.tone-success { color: #64edbd; border-color: rgba(64, 226, 177, .36); background: rgba(19, 104, 78, .18); }
+.dm-status.tone-danger { color: #ff8e9d; border-color: rgba(255, 103, 124, .36); background: rgba(119, 35, 49, .18); }
+.dm-status.tone-warning { color: #ffd07b; border-color: rgba(245, 184, 74, .35); background: rgba(112, 75, 22, .18); }
+.device-detail-hero { grid-template-columns: 112px minmax(300px, 1.25fr) minmax(250px, .9fr); }
+.device-visual { min-width: 0; min-height: 126px; }
+.device-detail-copy,
+.device-runtime { min-width: 0; }
+.detail-title-line strong { overflow-wrap: anywhere; line-height: 1.25; }
+.device-detail-copy dd,
+.device-runtime dd { min-width: 0; overflow-wrap: anywhere; word-break: normal; }
+.vehicle-registry-manager { min-height: 0; display: grid; grid-template-rows: 48px minmax(0, 1fr); gap: 12px; }
+.vehicle-registry-manager .business-resource-toolbar { grid-template-columns: minmax(190px, 1fr) minmax(240px, 1.2fr) 140px auto auto; }
+.vehicle-registry-grid { min-height: 0; display: grid; grid-template-columns: minmax(380px, .82fr) minmax(580px, 1.18fr); gap: 14px; }
+.vehicle-registry-list { gap: 7px; overflow: auto; }
+.vehicle-registry-list > button { width: 100%; min-height: 70px; display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; color: #e2f9fc; border: 1px solid rgba(158, 223, 234, .13); background: rgba(5, 38, 54, .58); text-align: left; }
+.vehicle-registry-list > button.selected { border-color: rgba(53, 235, 211, .64); background: rgba(12, 85, 97, .56); }
+.vehicle-registry-list > button > i { width: 9px; height: 9px; border-radius: 50%; background: #ff7586; box-shadow: 0 0 8px currentColor; }
+.vehicle-registry-list > button > i.online { background: #4df0bd; }
+.vehicle-registry-list > button > div { min-width: 0; display: grid; gap: 3px; }
+.vehicle-registry-list strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.vehicle-registry-list span,
+.vehicle-registry-list small { color: #88b7c0; font-size: 11px; }
+.vehicle-registry-form { overflow: auto; }
+.vehicle-registry-form .dm-panel-heading > div:first-child { display: grid; gap: 3px; }
+.vehicle-registry-form .dm-panel-heading span { color: #7eabb5; font-size: 11px; }
+.vehicle-registry-form input,
+.vehicle-registry-form select { width: 100%; min-height: 34px; padding: 0 9px; color: #e7fbff; border: 1px solid rgba(158, 223, 234, .2); background: rgba(5, 35, 50, .72); }
+.vehicle-registry-form h3 { margin: 5px 0 0; font-size: 13px; }
+.vehicle-camera-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.vehicle-heartbeat-detail { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.vehicle-heartbeat-detail span { display: grid; gap: 4px; padding: 9px; color: #80aeb8; border: 1px solid rgba(158, 223, 234, .13); font-size: 11px; }
+.vehicle-heartbeat-detail b { color: #ecfcff; font-size: 13px; }
+.vehicle-heartbeat-detail p { grid-column: 1 / -1; margin: 0; padding: 8px 10px; color: #ff9eaa; border-left: 3px solid #fa6579; background: rgba(104, 29, 43, .2); font-size: 11px; }
+
+@media (max-width: 1380px) {
+  .vehicle-registry-grid { grid-template-columns: minmax(320px, .75fr) minmax(500px, 1.25fr); }
+  .vehicle-registry-manager .business-resource-toolbar { grid-template-columns: 1fr 1fr 120px auto; }
+  .device-detail-hero { grid-template-columns: 90px minmax(260px, 1fr); }
+  .device-runtime { grid-column: 1 / -1; }
 }

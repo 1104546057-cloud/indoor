@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -162,6 +164,12 @@ class DeviceItem(Base):
     roi_width: Mapped[float | None] = mapped_column(Float, nullable=True)
     roi_height: Mapped[float | None] = mapped_column(Float, nullable=True)
     expected_state: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    recognition_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    camera_role: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    reference_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    inspection_point_id: Mapped[int | None] = mapped_column(
+        ForeignKey('tb_inspection_point.id'), index=True, nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -172,6 +180,7 @@ class DeviceItem(Base):
     threshold_rules: Mapped[list['ThresholdRule']] = relationship(
         back_populates='device_item', cascade='all, delete-orphan'
     )
+    inspection_point: Mapped['InspectionPoint | None'] = relationship(foreign_keys=[inspection_point_id])
 
 
 class ThresholdRule(Base):
@@ -212,6 +221,13 @@ class Robot(Base):
     position_x: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     position_y: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     yaw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    agent_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ssh_host: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    camera_roles: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
