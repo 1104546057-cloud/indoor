@@ -40,6 +40,7 @@ function UserManagement() {
   const [users, setUsers] = useState([])
   const [logs, setLogs] = useState([])
   const [selectedUserId, setSelectedUserId] = useState(null)
+  const [viewingUserId, setViewingUserId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -69,12 +70,28 @@ function UserManagement() {
 
   const selectedUser = users.find((user) => user.id === selectedUserId) || users[0]
   const selectedPermissions = effectivePermissions(selectedUser)
+  const viewingUser = users.find((user) => user.id === viewingUserId) || null
+  const viewingPermissions = effectivePermissions(viewingUser)
   const roleGroups = useMemo(() => Object.entries(roleLabels).map(([role, label]) => ({
     role,
     label,
     count: users.filter((user) => user.role === role).length,
   })), [users])
   const activeCount = users.filter((user) => user.isActive).length
+
+  useEffect(() => {
+    if (!viewingUserId) return undefined
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setViewingUserId(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [viewingUserId])
+
+  const openUserDetails = (user) => {
+    setSelectedUserId(user.id)
+    setViewingUserId(user.id)
+  }
 
   const createUser = async (event) => {
     event.preventDefault()
@@ -178,7 +195,7 @@ function UserManagement() {
           <div className="user-table">
             <div className="user-row user-head"><span>用户姓名</span><span>账号</span><span>角色</span><span>来源</span><span>账号状态</span><span>创建时间</span><span>更新时间</span><span>操作</span></div>
             <div className="user-table-body">{users.map((user) => (
-              <button type="button" className={`user-row${selectedUser?.id === user.id ? ' selected' : ''}`} key={user.id} onClick={() => setSelectedUserId(user.id)}>
+              <button type="button" className={`user-row${selectedUser?.id === user.id ? ' selected' : ''}`} key={user.id} onClick={() => openUserDetails(user)} title={`查看 ${user.nickname || user.username} 的账号详情`}>
                 <strong><i>{(user.nickname || user.username).slice(0, 1)}</i>{user.nickname || user.username}</strong><span>{user.username}</span><Badge value={roleLabels[user.role] || user.role} /><span>MySQL</span><Badge value={user.isActive ? '启用' : '禁用'} /><span>{user.createdAt || '--'}</span><span>{user.updatedAt || '--'}</span><b>查看</b>
               </button>
             ))}</div>
@@ -210,6 +227,42 @@ function UserManagement() {
           </> : <div className="business-empty">暂无用户</div>}
         </aside>
       </div>
+
+      {viewingUser ? (
+        <div className="user-detail-modal-backdrop" role="presentation" onMouseDown={() => setViewingUserId(null)}>
+          <section className="user-detail-modal" role="dialog" aria-modal="true" aria-labelledby="user-detail-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span>ACCOUNT PROFILE</span>
+                <h2 id="user-detail-modal-title">用户账号详情</h2>
+              </div>
+            </header>
+            <div className="user-detail-modal-profile">
+              <div className="avatar-face">{(viewingUser.nickname || viewingUser.username).slice(0, 1)}</div>
+              <div>
+                <div className="profile-name"><strong>{viewingUser.nickname || viewingUser.username}</strong><Badge value={roleLabels[viewingUser.role] || viewingUser.role} /></div>
+                <p>账号：{viewingUser.username}</p>
+                <p>来源：MySQL · users 表</p>
+              </div>
+              <dl>
+                <div><dt>账号状态</dt><dd>{viewingUser.isActive ? '启用' : '禁用'}</dd></div>
+                <div><dt>创建时间</dt><dd>{viewingUser.createdAt || '--'}</dd></div>
+                <div><dt>更新时间</dt><dd>{viewingUser.updatedAt || '--'}</dd></div>
+              </dl>
+            </div>
+            <div className="user-detail-modal-permissions">
+              <h3>功能权限</h3>
+              {permissionModules.map((module) => (
+                <article key={module.key}>
+                  <strong>{module.label}</strong>
+                  <div>{permissionActions.map((action) => <span className={viewingPermissions[module.key][action.key] ? 'allowed' : ''} key={action.key}>{action.label}</span>)}</div>
+                </article>
+              ))}
+            </div>
+            <footer><button type="button" onClick={() => setViewingUserId(null)}>关闭</button></footer>
+          </section>
+        </div>
+      ) : null}
 
       <div className="user-bottom-grid">
         <section className="um-panel audit-panel"><div className="um-heading compact"><h2>真实操作审计日志</h2><span>tb_system_log</span></div><div className="audit-table">{logs.length === 0 ? <div className="business-empty">暂无操作日志</div> : logs.map((log) => <div className="audit-row" key={log.id}><span>{log.createdAt || '--'}</span><strong>{log.username}</strong><span>{log.module}</span><span>{log.action} · {log.content || '--'}</span><span>{log.ipAddress || '--'}</span><Badge value={log.result} /></div>)}</div></section>

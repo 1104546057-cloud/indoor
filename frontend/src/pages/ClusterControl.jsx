@@ -14,6 +14,7 @@ import {
   loadPatrolMonitorContext,
   savePatrolMonitorContext,
 } from '../utils/patrolMonitor'
+import { downloadInspectionReport } from '../utils/reportExport'
 import '../styles/ClusterControl.css'
 import '../styles/BusinessModules.css'
 
@@ -1503,7 +1504,7 @@ function AiReviewView({ aiRecords, selectedTaskId, onSelectTask, onReview, onRep
   )
 }
 
-function ReportCenterView({ reportRecords, selectedReportId, onSelect, onPreview, onReplay }) {
+function ReportCenterView({ reportRecords, selectedReportId, onSelect, onPreview, onExport, onReplay, onExit, actionNotice }) {
   const selectedReport = reportRecords.find((record) => record.id === selectedReportId) || reportRecords[0]
   const reportStats = [
     { label: '报告档案', value: reportRecords.length, unit: '项' },
@@ -1519,12 +1520,19 @@ function ReportCenterView({ reportRecords, selectedReportId, onSelect, onPreview
           <h2>巡检报告归档中心</h2>
           <p>基于历史巡检档案、AI 复核结论生成报告，用于预览、导出和归档</p>
         </div>
-        <div className="task-filters archive-filters">
-          <label>状态<select defaultValue="all"><option value="all">全部</option></select></label>
-          <label>周期<select defaultValue="week"><option value="week">本周</option></select></label>
-          <label>机器人<select defaultValue="all"><option value="all">全部</option></select></label>
+        <div className="archive-heading-actions">
+          <div className="task-filters archive-filters">
+            <label>状态<select defaultValue="all"><option value="all">全部</option></select></label>
+            <label>周期<select defaultValue="week"><option value="week">本周</option></select></label>
+            <label>机器人<select defaultValue="all"><option value="all">全部</option></select></label>
+          </div>
+          <button type="button" className="report-exit-button" onClick={onExit} aria-label="退出巡检报告" title="退出巡检报告">
+            <span aria-hidden="true">×</span>退出
+          </button>
         </div>
       </div>
+
+      {actionNotice && <div className="task-action-notice">{actionNotice}</div>}
 
       <div className="archive-kpi-grid">
         {reportStats.map((item) => (
@@ -1564,7 +1572,7 @@ function ReportCenterView({ reportRecords, selectedReportId, onSelect, onPreview
                 <TaskStatus status={record.reportStatus} />
                 <div className="row-actions">
                   <button type="button" className="action-start" onClick={(event) => { event.stopPropagation(); onPreview(record) }}>预览</button>
-                  <button type="button" onClick={(event) => { event.stopPropagation(); onPreview(record) }}>导出</button>
+                  <button type="button" onClick={(event) => { event.stopPropagation(); onExport(record) }}>导出</button>
                   <button type="button" className="action-remote" onClick={(event) => { event.stopPropagation(); onReplay(record) }}>回放</button>
                 </div>
               </article>
@@ -2845,6 +2853,35 @@ function ClusterControl() {
     setActionNotice(`${record.name} 的巡检报告已进入预览导出流程。`)
   }
 
+  const handleReportExport = (record) => {
+    const target = record || reportRecords.find((item) => item.id === selectedTaskId) || reportRecords[0]
+    if (!target) {
+      setActiveTab('report')
+      setActionNotice('暂无可导出的后端巡检报告。请先完成巡检并生成巡检档案。')
+      return
+    }
+    if (target.source !== 'business') {
+      setActiveTab('report')
+      setActionNotice('当前为演示兜底数据，不能作为正式报告导出。请先同步后端巡检档案。')
+      return
+    }
+    if (target.reviewState === '待复核') {
+      setSelectedTaskId(target.id)
+      setActiveTab('report')
+      setActionNotice(`${target.name} 存在待复核异常，完成 AI 复核后才能导出正式报告。`)
+      return
+    }
+    const fileName = downloadInspectionReport(target)
+    setSelectedTaskId(target.id)
+    setActiveTab('report')
+    setActionNotice(`${target.name} 的后端巡检报告已导出：${fileName}`)
+  }
+
+  const exitReportCenter = () => {
+    setActiveTab('plan')
+    setActionNotice('已退出巡检报告，返回巡检计划。')
+  }
+
   const handleContextPrimaryAction = () => {
     if (activeTab === 'records') {
       openPatrolReplay(contextTask)
@@ -2922,7 +2959,7 @@ function ClusterControl() {
         </section>
         <div className="task-actions">
           <button type="button" className="console-action primary" onClick={() => openPlanModal()}><span>+</span>新建计划</button>
-          <button type="button" className="console-action"><span></span>导出报告</button>
+          <button type="button" className="console-action" onClick={() => handleReportExport()}><span></span>导出报告</button>
         </div>
       </header>
 
@@ -2972,7 +3009,10 @@ function ClusterControl() {
               selectedReportId={selectedTaskId}
               onSelect={setSelectedTaskId}
               onPreview={handleReportPreview}
+              onExport={handleReportExport}
               onReplay={openPatrolReplay}
+              onExit={exitReportCenter}
+              actionNotice={actionNotice}
             />
           )}
 
