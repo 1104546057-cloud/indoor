@@ -1,16 +1,19 @@
+/* eslint-disable react/prop-types */
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { clearUser, getStoredUser, hasRuntimeLogin } from '../utils/auth'
+import { clearUser, getStoredUser, hasRuntimeLogin, saveUser } from '../utils/auth'
 
 function ProtectedRoute({ children }) {
   const [authState, setAuthState] = useState('checking')
   const user = getStoredUser()
+  const userToken = user?.token
 
   useEffect(() => {
     let ignore = false
 
     async function verifySession() {
-      if (!user?.token || !hasRuntimeLogin()) {
+      const sessionUser = getStoredUser()
+      if (!sessionUser?.token || !hasRuntimeLogin()) {
         clearUser()
         if (!ignore) setAuthState('guest')
         return
@@ -21,6 +24,8 @@ function ProtectedRoute({ children }) {
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`)
         }
+        const currentUser = await response.json()
+        saveUser({ ...sessionUser, ...currentUser, token: sessionUser.token })
         if (!ignore) setAuthState('authed')
       } catch {
         clearUser()
@@ -33,7 +38,7 @@ function ProtectedRoute({ children }) {
     return () => {
       ignore = true
     }
-  }, [user?.token])
+  }, [userToken])
 
   if (authState === 'checking') {
     return null

@@ -34,6 +34,7 @@ try:
         ThresholdRule,
     )
     from .navigation_workflow import begin_route_execution, navigation_execution_id, start_route_monitor
+    from .permissions import require_permission
     from .vehicle_client import remove_vehicle_registry, send_navigation_route, upsert_vehicle_registry
 except ImportError:
     from database import get_db
@@ -57,6 +58,7 @@ except ImportError:
         ThresholdRule,
     )
     from navigation_workflow import begin_route_execution, navigation_execution_id, start_route_monitor
+    from permissions import require_permission
     from vehicle_client import remove_vehicle_registry, send_navigation_route, upsert_vehicle_registry
 
 
@@ -180,11 +182,6 @@ class TaskStatusPayload(BaseModel):
     position_y: float | None = None
     yaw: float | None = None
     battery: float | None = None
-
-
-def _require_admin(current_user) -> None:
-    if getattr(current_user, 'role', None) != 'admin':
-        raise HTTPException(status_code=403, detail='只有管理员可以维护设备主数据')
 
 
 def _validate_item_payload(payload: DeviceItemPayload, db: Session) -> None:
@@ -609,12 +606,12 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/seed')
     def seed(current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'create')
         return seed_standard_data(db)
 
     @router.post('/rooms')
     def create_room(payload: RoomPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'create')
         if db.query(Room).filter(Room.room_code == payload.room_code).first():
             raise HTTPException(status_code=409, detail='电房编码已存在')
         room = Room(**payload.model_dump())
@@ -626,7 +623,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.put('/rooms/{room_id}')
     def update_room(room_id: int, payload: RoomPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'update')
         room = db.get(Room, room_id)
         if room is None:
             raise HTTPException(status_code=404, detail='电房不存在')
@@ -642,7 +639,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.delete('/rooms/{room_id}')
     def delete_room(room_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'delete')
         room = db.get(Room, room_id)
         if room is None:
             raise HTTPException(status_code=404, detail='电房不存在')
@@ -666,7 +663,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/cabinets')
     def create_cabinet(payload: CabinetPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'create')
         if db.query(Cabinet).filter(Cabinet.cabinet_code == payload.cabinet_code).first():
             raise HTTPException(status_code=409, detail='电柜编码已存在')
         if db.get(Room, payload.room_id) is None:
@@ -680,7 +677,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.put('/cabinets/{cabinet_id}')
     def update_cabinet(cabinet_id: int, payload: CabinetPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'update')
         cabinet = db.get(Cabinet, cabinet_id)
         if cabinet is None:
             raise HTTPException(status_code=404, detail='电柜不存在')
@@ -701,7 +698,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.delete('/cabinets/{cabinet_id}')
     def delete_cabinet(cabinet_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'delete')
         cabinet = db.get(Cabinet, cabinet_id)
         if cabinet is None:
             raise HTTPException(status_code=404, detail='电柜不存在')
@@ -725,7 +722,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/device-items')
     def create_device_item(payload: DeviceItemPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'create')
         if db.query(DeviceItem).filter(DeviceItem.item_code == payload.item_code).first():
             raise HTTPException(status_code=409, detail='监测对象编码已存在')
         if db.get(Cabinet, payload.cabinet_id) is None:
@@ -751,7 +748,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.put('/device-items/{item_id}')
     def update_device_item(item_id: int, payload: DeviceItemPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'update')
         item = db.get(DeviceItem, item_id)
         if item is None:
             raise HTTPException(status_code=404, detail='监测对象不存在')
@@ -776,7 +773,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.delete('/device-items/{item_id}')
     def delete_device_item(item_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'delete')
         item = db.get(DeviceItem, item_id)
         if item is None:
             raise HTTPException(status_code=404, detail='监测对象不存在')
@@ -799,7 +796,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/threshold-rules')
     def create_threshold(payload: ThresholdPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'create')
         if db.get(DeviceItem, payload.item_id) is None:
             raise HTTPException(status_code=404, detail='监测对象不存在')
         values = payload.model_dump()
@@ -813,7 +810,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.put('/threshold-rules/{rule_id}')
     def update_threshold(rule_id: int, payload: ThresholdPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'update')
         rule = db.get(ThresholdRule, rule_id)
         if rule is None:
             raise HTTPException(status_code=404, detail='阈值规则不存在')
@@ -830,7 +827,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.delete('/threshold-rules/{rule_id}')
     def delete_threshold(rule_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'delete')
         rule = db.get(ThresholdRule, rule_id)
         if rule is None:
             raise HTTPException(status_code=404, detail='阈值规则不存在')
@@ -846,7 +843,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/assets/image')
     def upload_asset_image(payload: ImageAssetPayload, current_user=auth):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'create')
         if ',' not in payload.data_url:
             raise HTTPException(status_code=422, detail='图片数据格式错误')
         header, encoded = payload.data_url.split(',', 1)
@@ -871,6 +868,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.get('/assets/{asset_name}')
     def read_asset_image(asset_name: str, current_user=auth):
+        require_permission(current_user, 'device_resources', 'view')
         safe_name = Path(asset_name).name
         path = ASSET_DIRECTORY / safe_name
         if safe_name != asset_name or not path.is_file():
@@ -903,7 +901,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/robots')
     def create_robot(payload: VehicleRegistryPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'create')
         if db.query(Robot).filter(Robot.robot_code == payload.robot_code).first():
             raise HTTPException(status_code=409, detail='车辆编号已存在')
         config = upsert_vehicle_registry(payload.robot_code, vehicle_registry_values(payload))
@@ -917,7 +915,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.put('/robots/{robot_id}')
     def update_robot(robot_id: int, payload: VehicleRegistryPayload, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'update')
         robot = db.get(Robot, robot_id)
         if robot is None:
             raise HTTPException(status_code=404, detail='车辆档案不存在')
@@ -932,7 +930,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.delete('/robots/{robot_id}')
     def delete_robot(robot_id: int, hard: bool = False, current_user=auth, db: Session = Depends(get_db)):
-        _require_admin(current_user)
+        require_permission(current_user, 'device_resources', 'delete')
         robot = db.get(Robot, robot_id)
         if robot is None:
             raise HTTPException(status_code=404, detail='车辆档案不存在')
@@ -956,6 +954,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/points')
     def create_point(payload: PointPayload, current_user=auth, db: Session = Depends(get_db)):
+        require_permission(current_user, 'patrol_tasks', 'create')
         if db.query(InspectionPoint).filter(InspectionPoint.point_code == payload.point_code).first():
             raise HTTPException(status_code=409, detail='巡检点编码已存在')
         point = InspectionPoint(**payload.model_dump())
@@ -967,6 +966,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
 
     @router.post('/routes')
     def create_route(payload: RoutePayload, current_user=auth, db: Session = Depends(get_db)):
+        require_permission(current_user, 'patrol_tasks', 'create')
         if db.query(Route).filter(Route.route_code == payload.route_code).first():
             raise HTTPException(status_code=409, detail='路线编码已存在')
         points = [db.get(InspectionPoint, point_id) for point_id in payload.point_ids]
@@ -995,6 +995,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         current_user=auth,
         db: Session = Depends(get_db),
     ):
+        require_permission(current_user, 'patrol_tasks', 'update')
         route = db.get(Route, route_id)
         if route is None:
             raise HTTPException(status_code=404, detail='巡检路线不存在')
@@ -1166,6 +1167,7 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         current_user=auth,
         db: Session = Depends(get_db),
     ):
+        require_permission(current_user, 'alarm_loop', 'update')
         alarm = db.get(Alarm, alarm_id)
         if alarm is None:
             raise HTTPException(status_code=404, detail='告警不存在')

@@ -4,12 +4,37 @@ import { useNavigate } from 'react-router-dom'
 import * as THREE from 'three'
 import useBusinessOverview from '../hooks/useBusinessOverview'
 import { labBuildingMap, labInspectionPointById } from '../data/labBuildingMap'
-import { hanlinRoomMap, inspectionPointById } from '../data/hanlinRoomMap'
+import { hanlinRoomMap, inspectionPointById, routeById } from '../data/hanlinRoomMap'
 import { buildPatrolMonitorUrl } from '../utils/patrolMonitor'
 import '../styles/SchoolFleetDashboard.css'
 
 const FLEET_SIZE = 22
-const MAX_ACTIVE_VISUALS = 6
+const OVERVIEW_WINDOW_LIMIT = 4
+const MAX_ACTIVE_VISUALS = 4
+const POWER_ROOM_DWELL_SECONDS = 3.2
+const POWER_ROOM_TRAVEL_SECONDS = 2.1
+const REPLAY_VIEW_PRESETS = [
+  { progress: 0.06, cameraOffset: [-4.8, 3.5, 5.4], fov: 50 },
+  { progress: 0.31, cameraOffset: [4.6, 2.9, 4.2], fov: 56 },
+  { progress: 0.56, cameraOffset: [4.2, 3.8, -5.2], fov: 48 },
+  { progress: 0.81, cameraOffset: [-4.4, 3.1, -4.6], fov: 58 },
+]
+const DEMO_REPLAY_CONFIG = {
+  3: {
+    map: hanlinRoomMap,
+    routeId: 'route-p-main',
+    roomName: '瀚林1号电房 / P柜区',
+    taskName: 'P柜历史巡检点模拟',
+    code: 'POWER-P DEMO',
+  },
+  4: {
+    map: hanlinRoomMap,
+    routeId: 'route-g-main',
+    roomName: '瀚林1号电房 / G柜区',
+    taskName: 'G柜历史巡检点模拟',
+    code: 'POWER-G DEMO',
+  },
+}
 const ACTIVE_RECORD_STATES = new Set(['dispatching', 'running'])
 const REPLAY_RECORD_STATES = new Set(['completed', 'failed', 'cancelled', '已完成', '异常', '待审核'])
 const ABNORMAL_STATES = new Set(['异常', '告警'])
@@ -19,6 +44,13 @@ const CAMERA_ROLES = [
   { role: 'low', label: '低位摄像头', code: 'CAM-L' },
   { role: 'ptz', label: '云台摄像头', code: 'CAM-PTZ' },
 ]
+
+function getPowerRoomReplayPhase(progress) {
+  if (progress < 0.24) return { key: 'capture', label: '停车采集图像' }
+  if (progress < 0.54) return { key: 'recognize', label: '扫描识别电箱' }
+  if (progress < 0.82) return { key: 'upload', label: '上传巡检结果' }
+  return { key: 'complete', label: '本点巡检完成' }
+}
 
 function vehicleNumber(value) {
   const match = String(value || '').match(/(\d+)$/)
@@ -127,6 +159,7 @@ function getVehicleMap(vehicle) {
   const area = vehicle.roomName || ''
   if (sceneId === 'lab-building' || area.includes('实验楼')) return labBuildingMap
   if (area.includes('瀚林') || area.includes('电房')) return hanlinRoomMap
+  if (!vehicle.record && DEMO_REPLAY_CONFIG[vehicle.index]) return DEMO_REPLAY_CONFIG[vehicle.index].map
   return labBuildingMap
 }
 
@@ -164,14 +197,40 @@ function readTelemetryPose(telemetry, mapData) {
 
 function getReplayRoute(vehicle, mapData) {
   const savedPoints = vehicle.replayRecord?.routePoints || []
-  const sourcePoints = savedPoints.length ? savedPoints : mapData.inspectionPoints || []
+  const demoConfig = !vehicle.replayRecord ? DEMO_REPLAY_CONFIG[vehicle.index] : null
+  const demoRoute = demoConfig?.routeId ? routeById[demoConfig.routeId] : null
+  const demoRoutePoints = demoRoute?.pointIds.map((pointId) => inspectionPointById[pointId]).filter(Boolean) || []
+  const sourcePoints = savedPoints.length
+    ? savedPoints
+    : demoRoutePoints.length
+      ? demoRoutePoints
+      : mapData.inspectionPoints || []
   return sourcePoints.map((point) => toModelPoint(point, mapData)).filter(Boolean)
+}
+
+function getRouteDisplayPath(routePoints, mapData) {
+  const transitions = mapData.routeTransitions || {}
+  return routePoints.reduce((path, point, index) => {
+    if (index > 0) {
+      const previousPoint = routePoints[index - 1]
+      const previousId = previousPoint.id || previousPoint.point_id
+      const pointId = point.id || point.point_id
+      const directTransition = transitions[`${previousId}->${pointId}`]
+      const reverseTransition = transitions[`${pointId}->${previousId}`]
+      const transitionPoints = directTransition || (reverseTransition ? [...reverseTransition].reverse() : [])
+      path.push(...transitionPoints)
+    }
+    path.push(point)
+    return path
+  }, [])
 }
 
 function ReplayStaticScene({ vehicle, mapData, routePoints }) {
   const width = mapData.size.width
   const height = mapData.size.height
-  const marker = routePoints[Math.min(routePoints.length - 1, Math.max(0, Math.floor(routePoints.length * 0.34)))]
+  const displayRoute = getRouteDisplayPath(routePoints, mapData)
+  const viewPreset = REPLAY_VIEW_PRESETS[(vehicle.index - 1) % REPLAY_VIEW_PRESETS.length]
+  const marker = displayRoute[Math.min(displayRoute.length - 1, Math.floor(displayRoute.length * viewPreset.progress))]
 
   return (
     <div className="fleet-replay-static" aria-label={`${vehicle.label}静态路线回放预览`}>
@@ -186,7 +245,7 @@ function ReplayStaticScene({ vehicle, mapData, routePoints }) {
         {(mapData.walls || []).map((wall) => (
           <line key={wall.id} x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} strokeWidth={Math.max(wall.thickness || 200, 260)} className="replay-static-wall" />
         ))}
-        {routePoints.length > 1 ? <polyline points={routePoints.map((point) => `${point.x},${point.y}`).join(' ')} className="replay-static-route" /> : null}
+        {displayRoute.length > 1 ? <polyline points={displayRoute.map((point) => `${point.x},${point.y}`).join(' ')} className="replay-static-route" /> : null}
         {routePoints.map((point, index) => <circle key={`${point.id || index}`} cx={point.x} cy={point.y} r="850" className="replay-static-point" />)}
         {marker ? (
           <g className="replay-static-car" transform={`translate(${marker.x} ${marker.y})`}>
@@ -202,6 +261,7 @@ function ReplayStaticScene({ vehicle, mapData, routePoints }) {
 
 function RouteReplay3D({ vehicle, mapData, routePoints, full = false }) {
   const mountRef = useRef(null)
+  const phaseLabelRef = useRef(null)
 
   useEffect(() => {
     const mount = mountRef.current
@@ -209,16 +269,18 @@ function RouteReplay3D({ vehicle, mapData, routePoints, full = false }) {
 
     const width = mapData.size.width
     const height = mapData.size.height
+    const isPowerRoomReplay = mapData.id === hanlinRoomMap.id
     const worldScale = 18 / Math.max(width, height)
     const worldPoint = (x, y, elevation = 0) => new THREE.Vector3(
       (Number(x) - width / 2) * worldScale,
       elevation,
       (Number(y) - height / 2) * worldScale,
     )
+    const viewPreset = REPLAY_VIEW_PRESETS[(vehicle.index - 1) % REPLAY_VIEW_PRESETS.length]
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x02121b)
     scene.fog = new THREE.Fog(0x02121b, 18, 34)
-    const camera = new THREE.PerspectiveCamera(full ? 48 : 54, 1, 0.1, 80)
+    const camera = new THREE.PerspectiveCamera(full ? Math.max(44, viewPreset.fov - 4) : viewPreset.fov, 1, 0.1, 80)
     const renderer = new THREE.WebGLRenderer({ antialias: full, powerPreference: 'high-performance' })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, full ? 1.5 : 1))
     renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -269,38 +331,145 @@ function RouteReplay3D({ vehicle, mapData, routePoints, full = false }) {
       scene.add(mesh)
     }
     ;(mapData.halls || []).forEach((hall) => addBlock(hall, 0.12, 0x184b59))
-    ;(mapData.cabinets || []).forEach((cabinet) => addBlock(cabinet, 0.76, 0x426c75))
     ;(mapData.columns || []).forEach((column) => addBlock(column, 0.82, 0x758e92))
 
-    const worldRoute = routePoints.map((point) => worldPoint(point.x, point.y, 0.1))
+    ;(mapData.landmarkLines || []).forEach((line) => {
+      const lineWidth = Math.max((line.lineWidth || 100) * worldScale, 0.035)
+      const x = (line.x - width / 2) * worldScale
+      const z = (line.y - height / 2) * worldScale
+      const markWidth = line.width * worldScale
+      const markDepth = line.height * worldScale
+      const material = new THREE.MeshBasicMaterial({ color: 0xe8d94a, transparent: true, opacity: 0.46 })
+      ;[
+        { x: x + markWidth / 2, z, width: markWidth, depth: lineWidth },
+        { x: x + markWidth / 2, z: z + markDepth, width: markWidth, depth: lineWidth },
+        { x, z: z + markDepth / 2, width: lineWidth, depth: markDepth },
+        { x: x + markWidth, z: z + markDepth / 2, width: lineWidth, depth: markDepth },
+      ].forEach((segment) => {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(segment.width, 0.025, segment.depth), material)
+        strip.position.set(segment.x, 0.018, segment.z)
+        scene.add(strip)
+      })
+    })
+
+    const activeCabinetEdges = new Map()
+    const cabinetTargets = new Map()
+    ;(mapData.cabinets || []).forEach((cabinet) => {
+      const cabinetWidth = Math.max(Number(cabinet.width || 800) * worldScale, 0.1)
+      const cabinetDepth = Math.max(Number(cabinet.depth || 800) * worldScale, 0.1)
+      const cabinetHeight = Math.max(Number(cabinet.height || 1800) * worldScale, 0.58)
+      const cabinetGeometry = new THREE.BoxGeometry(cabinetWidth, cabinetHeight, cabinetDepth)
+      const cabinetMaterial = new THREE.MeshStandardMaterial({
+        color: cabinet.type === 'transformer' ? 0x62583b : 0x315e70,
+        emissive: cabinet.type === 'transformer' ? 0x211c0e : 0x082a35,
+        metalness: cabinet.type === 'transformer' ? 0.12 : 0.28,
+        roughness: 0.48,
+      })
+      const cabinetMesh = new THREE.Mesh(cabinetGeometry, cabinetMaterial)
+      const cabinetCenter = worldPoint(
+        Number(cabinet.x) + Number(cabinet.width || 800) / 2,
+        Number(cabinet.y) + Number(cabinet.depth || 800) / 2,
+      )
+      cabinetMesh.position.set(cabinetCenter.x, cabinetHeight / 2, cabinetCenter.z)
+      scene.add(cabinetMesh)
+
+      const edge = new THREE.LineSegments(
+        new THREE.EdgesGeometry(cabinetGeometry),
+        new THREE.LineBasicMaterial({ color: 0x9deaf1, transparent: true, opacity: 0.52 }),
+      )
+      edge.position.copy(cabinetMesh.position)
+      scene.add(edge)
+
+      const activeEdge = new THREE.LineSegments(
+        new THREE.EdgesGeometry(cabinetGeometry),
+        new THREE.LineBasicMaterial({ color: 0xffdf66, transparent: true, opacity: 0 }),
+      )
+      activeEdge.position.copy(cabinetMesh.position)
+      activeEdge.visible = false
+      scene.add(activeEdge)
+      activeCabinetEdges.set(cabinet.id, activeEdge)
+
+      const panelMaterial = new THREE.MeshStandardMaterial({ color: 0x102b35, roughness: 0.36, metalness: 0.24 })
+      const indicatorMaterial = new THREE.MeshBasicMaterial({ color: 0x63f2c6 })
+      const frontIsVertical = cabinet.face === 'east' || cabinet.face === 'west'
+      const panelGeometry = frontIsVertical
+        ? new THREE.BoxGeometry(0.025, cabinetHeight * 0.76, cabinetDepth * 0.72)
+        : new THREE.BoxGeometry(cabinetWidth * 0.72, cabinetHeight * 0.76, 0.025)
+      const panel = new THREE.Mesh(panelGeometry, panelMaterial)
+      panel.position.copy(cabinetMesh.position)
+      const faceDirection = {
+        north: new THREE.Vector3(0, 0, -1),
+        south: new THREE.Vector3(0, 0, 1),
+        east: new THREE.Vector3(1, 0, 0),
+        west: new THREE.Vector3(-1, 0, 0),
+      }[cabinet.face] || new THREE.Vector3(0, 0, 1)
+      const faceDistance = frontIsVertical ? cabinetWidth / 2 + 0.016 : cabinetDepth / 2 + 0.016
+      panel.position.addScaledVector(faceDirection, faceDistance)
+      scene.add(panel)
+
+      const indicator = new THREE.Mesh(new THREE.SphereGeometry(Math.max(cabinetWidth * 0.055, 0.028), 10, 10), indicatorMaterial)
+      indicator.position.copy(panel.position).add(new THREE.Vector3(0, cabinetHeight * 0.21, 0)).addScaledVector(faceDirection, 0.022)
+      scene.add(indicator)
+      cabinetTargets.set(cabinet.id, panel.position.clone().add(new THREE.Vector3(0, cabinetHeight * 0.08, 0)))
+    })
+
+    const displayRoute = getRouteDisplayPath(routePoints, mapData)
+    const worldRoute = displayRoute.map((point) => worldPoint(point.x, point.y, 0.1))
     const routeGeometry = new THREE.BufferGeometry().setFromPoints(worldRoute)
     const routeLine = new THREE.Line(routeGeometry, new THREE.LineBasicMaterial({ color: 0x48f0c7, transparent: true, opacity: 0.9 }))
     scene.add(routeLine)
+    const pointMarkers = []
     worldRoute.forEach((point, index) => {
       const marker = new THREE.Mesh(
-        new THREE.CylinderGeometry(index === 0 ? 0.16 : 0.11, index === 0 ? 0.16 : 0.11, 0.08, 12),
+        new THREE.CylinderGeometry(index === 0 ? 0.13 : 0.085, index === 0 ? 0.13 : 0.085, 0.06, 12),
         new THREE.MeshBasicMaterial({ color: index === 0 ? 0x5ff3bc : 0x5ce8ef }),
       )
       marker.position.copy(point)
       scene.add(marker)
+      pointMarkers.push(marker)
     })
 
     const car = new THREE.Group()
+    const carScale = isPowerRoomReplay ? 0.64 : 0.35
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(0.62, 0.28, 0.9),
+      new THREE.BoxGeometry(0.62 * carScale, 0.28 * carScale, 0.9 * carScale),
       new THREE.MeshStandardMaterial({ color: 0x73ecf4, roughness: 0.32, metalness: 0.42 }),
     )
-    body.position.y = 0.22
+    body.position.y = 0.22 * carScale
     car.add(body)
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.42, 4), new THREE.MeshBasicMaterial({ color: 0xffc45c }))
+    const sensor = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12 * carScale, 0.12 * carScale, 0.14 * carScale, 16),
+      new THREE.MeshStandardMaterial({ color: 0xe2fbff, emissive: 0x164b55, roughness: 0.28 }),
+    )
+    sensor.position.y = 0.44 * carScale
+    car.add(sensor)
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.18 * carScale, 0.42 * carScale, 4), new THREE.MeshBasicMaterial({ color: 0xffc45c }))
     nose.rotation.x = Math.PI / 2
-    nose.position.set(0, 0.24, -0.62)
+    nose.position.set(0, 0.24 * carScale, -0.62 * carScale)
     car.add(nose)
-    const glow = new THREE.Mesh(new THREE.RingGeometry(0.48, 0.62, 24), new THREE.MeshBasicMaterial({ color: 0x37e9c2, transparent: true, opacity: 0.5, side: THREE.DoubleSide }))
+    const glow = new THREE.Mesh(new THREE.RingGeometry(0.48 * carScale, 0.62 * carScale, 24), new THREE.MeshBasicMaterial({ color: 0x37e9c2, transparent: true, opacity: 0.5, side: THREE.DoubleSide }))
     glow.rotation.x = -Math.PI / 2
     glow.position.y = 0.03
     car.add(glow)
     scene.add(car)
+
+    const scanBeamGeometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(), new THREE.Vector3(),
+      new THREE.Vector3(), new THREE.Vector3(),
+      new THREE.Vector3(), new THREE.Vector3(),
+    ])
+    const scanBeam = new THREE.LineSegments(
+      scanBeamGeometry,
+      new THREE.LineBasicMaterial({ color: 0x67f4d1, transparent: true, opacity: 0.72 }),
+    )
+    scanBeam.visible = false
+    scene.add(scanBeam)
+    const scanTarget = new THREE.Mesh(
+      new THREE.RingGeometry(0.12, 0.18, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffdf66, transparent: true, opacity: 0.8, side: THREE.DoubleSide }),
+    )
+    scanTarget.visible = false
+    scene.add(scanTarget)
 
     const segmentLengths = worldRoute.slice(0, -1).map((point, index) => point.distanceTo(worldRoute[index + 1]))
     const routeLength = segmentLengths.reduce((sum, value) => sum + value, 0) || 1
@@ -321,21 +490,100 @@ function RouteReplay3D({ vehicle, mapData, routePoints, full = false }) {
 
     let frameId = 0
     let lastFrameAt = 0
-    const startedAt = performance.now() - vehicle.index * 970
+    const replayDuration = full ? 52000 : 64000
+    const powerRoomStepDuration = POWER_ROOM_DWELL_SECONDS + POWER_ROOM_TRAVEL_SECONDS
+    const initialPowerRoomIndex = Math.min(
+      worldRoute.length - 1,
+      Math.max(0, Math.floor(viewPreset.progress * worldRoute.length)),
+    )
+    const startedAt = performance.now() - (
+      isPowerRoomReplay
+        ? initialPowerRoomIndex * powerRoomStepDuration * 1000
+        : viewPreset.progress * replayDuration
+    )
     const frameInterval = 1000 / (full ? 30 : 12)
+    const cameraOffset = new THREE.Vector3(...viewPreset.cameraOffset).multiplyScalar(full ? 1.2 : 1)
+    let lastPhaseText = ''
     const animate = (timestamp) => {
       frameId = window.requestAnimationFrame(animate)
       if (document.hidden || timestamp - lastFrameAt < frameInterval) return
       lastFrameAt = timestamp
-      const progress = ((timestamp - startedAt) / (full ? 26000 : 32000)) % 1
-      const sampled = sampleRoute(progress)
+      let routeIndex = 0
+      let isDwelling = false
+      let dwellProgress = 0
+      let sampled
+      if (isPowerRoomReplay) {
+        const elapsedSeconds = Math.max(0, (timestamp - startedAt) / 1000)
+        const cycleTime = elapsedSeconds % (worldRoute.length * powerRoomStepDuration)
+        routeIndex = Math.floor(cycleTime / powerRoomStepDuration)
+        const localTime = cycleTime % powerRoomStepDuration
+        const nextIndex = (routeIndex + 1) % worldRoute.length
+        isDwelling = localTime < POWER_ROOM_DWELL_SECONDS
+        dwellProgress = isDwelling ? localTime / POWER_ROOM_DWELL_SECONDS : 1
+        const travelProgress = isDwelling ? 0 : Math.min(1, (localTime - POWER_ROOM_DWELL_SECONDS) / POWER_ROOM_TRAVEL_SECONDS)
+        sampled = {
+          position: worldRoute[routeIndex].clone().lerp(worldRoute[nextIndex], travelProgress),
+          next: worldRoute[nextIndex],
+        }
+      } else {
+        const progress = ((timestamp - startedAt) / replayDuration) % 1
+        sampled = sampleRoute(progress)
+      }
       car.position.copy(sampled.position)
-      const dx = sampled.next.x - sampled.position.x
-      const dz = sampled.next.z - sampled.position.z
+      const activeRoutePoint = routePoints[routeIndex]
+      const activeCabinetId = activeRoutePoint?.cabinetId
+      const cabinetTarget = activeCabinetId ? cabinetTargets.get(activeCabinetId) : null
+      const headingTarget = isDwelling && cabinetTarget ? cabinetTarget : sampled.next
+      const dx = headingTarget.x - sampled.position.x
+      const dz = headingTarget.z - sampled.position.z
       if (Math.abs(dx) + Math.abs(dz) > 0.001) car.rotation.y = Math.atan2(-dx, -dz)
-      glow.material.opacity = 0.36 + Math.sin(timestamp * 0.006) * 0.16
+      glow.material.opacity = isDwelling
+        ? 0.48 + Math.sin(timestamp * 0.01) * 0.16
+        : 0.26 + Math.sin(timestamp * 0.006) * 0.08
+      glow.scale.setScalar(isDwelling ? 1.08 + Math.sin(timestamp * 0.01) * 0.06 : 1)
+      sensor.rotation.y = isDwelling ? Math.sin(timestamp * 0.006) * 0.72 : 0
 
-      const cameraOffset = full ? new THREE.Vector3(-4.8, 4.4, 6.4) : new THREE.Vector3(-3.5, 3.2, 4.8)
+      activeCabinetEdges.forEach((edge, cabinetId) => {
+        edge.visible = isDwelling && cabinetId === activeCabinetId
+        if (edge.visible) edge.material.opacity = 0.68 + Math.sin(timestamp * 0.009) * 0.24
+      })
+      pointMarkers.forEach((marker, index) => {
+        const active = isPowerRoomReplay && index === routeIndex
+        marker.scale.setScalar(active ? 1.35 + Math.sin(timestamp * 0.008) * 0.1 : 1)
+        marker.material.color.setHex(active ? 0xffdf66 : index === 0 ? 0x5ff3bc : 0x5ce8ef)
+      })
+
+      const scanning = isPowerRoomReplay && isDwelling && Boolean(cabinetTarget)
+      scanBeam.visible = scanning
+      scanTarget.visible = scanning
+      if (scanning) {
+        car.updateMatrixWorld(true)
+        const scanOrigin = car.localToWorld(new THREE.Vector3(0, 0.44 * carScale, -0.18 * carScale))
+        const sweep = 0.12 + Math.sin(timestamp * 0.008) * 0.06
+        scanBeamGeometry.setFromPoints([
+          scanOrigin, cabinetTarget,
+          scanOrigin, cabinetTarget.clone().add(new THREE.Vector3(sweep, 0.12, 0)),
+          scanOrigin, cabinetTarget.clone().add(new THREE.Vector3(-sweep, -0.12, 0)),
+        ])
+        scanBeam.material.opacity = 0.48 + Math.sin(timestamp * 0.012) * 0.28
+        scanTarget.position.copy(cabinetTarget)
+        scanTarget.lookAt(scanOrigin)
+        scanTarget.scale.setScalar(0.9 + Math.sin(timestamp * 0.011) * 0.16)
+      }
+
+      if (phaseLabelRef.current && isPowerRoomReplay) {
+        const phase = isDwelling ? getPowerRoomReplayPhase(dwellProgress) : { key: 'moving', label: '驶向下一巡检点' }
+        const targetName = isDwelling
+          ? activeRoutePoint?.targetName
+          : routePoints[(routeIndex + 1) % routePoints.length]?.targetName
+        const phaseText = `${phase.label}${targetName ? ` · ${targetName}` : ''}`
+        if (phaseText !== lastPhaseText) {
+          phaseLabelRef.current.textContent = phaseText
+          phaseLabelRef.current.dataset.phase = phase.key
+          lastPhaseText = phaseText
+        }
+      }
+
       const targetPosition = sampled.position.clone().add(cameraOffset)
       camera.position.lerp(targetPosition, full ? 0.075 : 0.12)
       camera.lookAt(sampled.position.x, 0.18, sampled.position.z)
@@ -352,9 +600,11 @@ function RouteReplay3D({ vehicle, mapData, routePoints, full = false }) {
     const observer = new ResizeObserver(resize)
     observer.observe(mount)
     resize()
-    const first = sampleRoute(0)
+    const first = isPowerRoomReplay
+      ? { position: worldRoute[initialPowerRoomIndex].clone() }
+      : sampleRoute(viewPreset.progress)
     car.position.copy(first.position)
-    camera.position.copy(first.position).add(full ? new THREE.Vector3(-4.8, 4.4, 6.4) : new THREE.Vector3(-3.5, 3.2, 4.8))
+    camera.position.copy(first.position).add(cameraOffset)
     frameId = window.requestAnimationFrame(animate)
 
     return () => {
@@ -370,25 +620,35 @@ function RouteReplay3D({ vehicle, mapData, routePoints, full = false }) {
     }
   }, [full, mapData, routePoints, vehicle.index])
 
-  return <div className={`fleet-replay-3d${full ? ' is-full' : ''}`} ref={mountRef} aria-label={`${vehicle.label}路线模拟3D跟随视角`} />
+  return (
+    <div className={`fleet-replay-3d${full ? ' is-full' : ''}`} ref={mountRef} aria-label={`${vehicle.label}路线模拟3D跟随视角`}>
+      {mapData.id === hanlinRoomMap.id ? <span className="fleet-replay-phase" ref={phaseLabelRef}>正在载入巡检动作</span> : null}
+    </div>
+  )
 }
 
 function ReplayFeed({ vehicle, animated, full = false }) {
   const mapData = getVehicleMap(vehicle)
-  const routePoints = useMemo(() => getReplayRoute(vehicle, mapData), [mapData, vehicle])
+  const routeCacheRef = useRef({ key: '', points: [] })
+  const routeCacheKey = `${mapData.id}:${vehicle.index}:${JSON.stringify(vehicle.replayRecord?.routePoints || [])}`
+  if (routeCacheRef.current.key !== routeCacheKey) {
+    routeCacheRef.current = { key: routeCacheKey, points: getReplayRoute(vehicle, mapData) }
+  }
+  const routePoints = routeCacheRef.current.points
   const isDemo = !vehicle.replayRecord
+  const demoConfig = isDemo ? DEMO_REPLAY_CONFIG[vehicle.index] : null
   const badge = animated ? (isDemo ? 'DEMO' : 'REPLAY') : 'STATIC'
   const recordTime = vehicle.replayRecord?.finishedAt || vehicle.replayRecord?.startedAt
 
   return (
     <article className={`fleet-camera fleet-replay-monitor${full ? ' is-full-replay' : ' is-compact'} ${animated ? 'is-animated' : 'is-static'}`}>
       <header>
-        <div><i /><strong>{full ? '完整3D跟随视角' : `${vehicle.label}路线回放`}</strong><span>{isDemo ? 'LAB-1 DEMO' : vehicle.replayRecord.recordCode || 'LAST TASK'}</span></div>
+        <div><i /><strong>{full ? '完整3D跟随视角' : `${vehicle.label}路线回放`}</strong><span>{isDemo ? demoConfig?.code || 'LAB-1 DEMO' : vehicle.replayRecord.recordCode || 'LAST TASK'}</span></div>
         <em>{badge}</em>
       </header>
       <div className="fleet-camera-viewport">
         {animated ? <RouteReplay3D vehicle={vehicle} mapData={mapData} routePoints={routePoints} full={full} /> : <ReplayStaticScene vehicle={vehicle} mapData={mapData} routePoints={routePoints} />}
-        <span className="fleet-replay-mode-label">{isDemo ? '实验楼一模拟路线' : '上次完成任务 · 路线模拟'}</span>
+        <span className="fleet-replay-mode-label">{isDemo ? demoConfig ? `${mapData.name} · 历史巡检点模拟` : '实验楼一模拟路线' : '上次完成任务 · 路线模拟'}</span>
         <span className="camera-corner top-left" />
         <span className="camera-corner top-right" />
         <span className="camera-corner bottom-left" />
@@ -396,7 +656,7 @@ function ReplayFeed({ vehicle, animated, full = false }) {
       </div>
       <footer>
         <span>{vehicle.roomName}</span>
-        <b>{isDemo ? '无历史记录 / 演示路线' : vehicle.replayRecord.taskName}</b>
+        <b>{isDemo ? demoConfig?.taskName || '无历史记录 / 演示路线' : vehicle.replayRecord.taskName}</b>
         <em>{recordTime ? formatTime(recordTime) : 'DEMO'}</em>
       </footer>
     </article>
@@ -459,10 +719,18 @@ function FleetRouteMap({ vehicle, telemetry, mapData }) {
     ? savedRoutePoints.map((point) => toModelPoint(point, mapData)).filter(Boolean)
     : vehicle.activeRecord ? [] : getReplayRoute(vehicle, mapData)
   const points = routePoints.length ? routePoints : []
+  const displayRoute = getRouteDisplayPath(points, mapData)
   const reachedCount = Number(navigation.reached_count ?? vehicle.record?.currentSequence ?? 0)
   const currentPose = readTelemetryPose(telemetry, mapData)
   const width = mapData.size.width
   const height = mapData.size.height
+  const mapUnit = Math.min(width, height)
+  const routeStrokeWidth = mapUnit * 0.006
+  const pointRadius = mapUnit * 0.018
+  const pointStrokeWidth = mapUnit * 0.0036
+  const pointFontSize = mapUnit * 0.016
+  const cabinetStrokeWidth = mapUnit * 0.0013
+  const robotRadius = mapUnit * 0.021
 
   return (
     <div className="fleet-route-map">
@@ -478,24 +746,24 @@ function FleetRouteMap({ vehicle, telemetry, mapData }) {
           <line key={wall.id} x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} strokeWidth={Math.max(wall.thickness, 260)} className="fleet-map-wall" />
         ))}
         {(mapData.cabinets || []).map((cabinet) => (
-          <rect key={cabinet.id} x={cabinet.x} y={cabinet.y} width={cabinet.width} height={cabinet.depth} className={`fleet-map-cabinet ${cabinet.type || ''}`} />
+          <rect key={cabinet.id} x={cabinet.x} y={cabinet.y} width={cabinet.width} height={cabinet.depth} className={`fleet-map-cabinet ${cabinet.type || ''}`} style={{ strokeWidth: cabinetStrokeWidth }} />
         ))}
-        {points.length > 1 ? (
-          <polyline points={points.map((point) => `${point.x},${point.y}`).join(' ')} className="fleet-map-route" />
+        {displayRoute.length > 1 ? (
+          <polyline points={displayRoute.map((point) => `${point.x},${point.y}`).join(' ')} className="fleet-map-route" style={{ strokeWidth: routeStrokeWidth }} />
         ) : null}
         {points.map((point, index) => {
           const state = index < reachedCount ? 'completed' : index === reachedCount ? 'current' : 'waiting'
           return (
             <g className={`fleet-map-point is-${state}`} key={`${point.id || point.name}-${index}`}>
-              <circle cx={point.x} cy={point.y} r="1050" />
-              <text x={point.x} y={point.y + 350}>{index + 1}</text>
+              <circle cx={point.x} cy={point.y} r={pointRadius} style={{ strokeWidth: pointStrokeWidth }} />
+              <text x={point.x} y={point.y + pointFontSize * 0.34} style={{ fontSize: pointFontSize }}>{index + 1}</text>
             </g>
           )
         })}
         {currentPose ? (
           <g className="fleet-map-robot" transform={`translate(${currentPose.x} ${currentPose.y}) rotate(${currentPose.yaw * 180 / Math.PI})`}>
-            <circle r="1280" />
-            <path d="M -700 700 L 0 -1050 L 700 700 Z" />
+            <circle r={robotRadius} style={{ strokeWidth: pointStrokeWidth }} />
+            <path d={`M ${-robotRadius * 0.52} ${robotRadius * 0.52} L 0 ${-robotRadius * 0.82} L ${robotRadius * 0.52} ${robotRadius * 0.52} Z`} />
           </g>
         ) : null}
       </svg>
@@ -515,15 +783,19 @@ function VehicleSidebar({ fleet, selectedId, mode, rooms, roomFilter, onModeChan
     const order = { alarm: 0, running: 1, warning: 2, idle: 3, offline: 4 }
     return order[a.status.key] - order[b.status.key] || a.index - b.index
   }), [fleet])
+  const roomFleet = fleet.filter((vehicle) => rooms.some((room) => vehicle.roomName.includes(room.name)))
+  const roomOnlineCount = roomFleet.filter((vehicle) => vehicle.online).length
+  const roomReplayCount = new Set(rooms.flatMap((room) => room.replayVehicleIndexes || [])).size
+  const roomPointCount = rooms.reduce((sum, room) => sum + Number(room.pointCount || 0), 0)
 
   return (
     <aside className="fleet-sidebar">
       <header>
         <div><span>MONITOR TARGETS</span><h2>监控对象</h2></div>
-        <b>{FLEET_SIZE}</b>
+        <b>{mode === 'rooms' ? rooms.length : FLEET_SIZE}</b>
       </header>
       <div className="fleet-sidebar-tabs">
-        <button type="button" className={mode === 'vehicles' ? 'active' : ''} onClick={() => onModeChange('vehicles')}>车辆 22</button>
+        <button type="button" className={mode === 'vehicles' ? 'active' : ''} onClick={() => onModeChange('vehicles')}>车辆 {FLEET_SIZE}</button>
         <button type="button" className={mode === 'rooms' ? 'active' : ''} onClick={() => onModeChange('rooms')}>电房 {rooms.length}</button>
       </div>
       {mode === 'vehicles' ? (
@@ -544,13 +816,25 @@ function VehicleSidebar({ fleet, selectedId, mode, rooms, roomFilter, onModeChan
       ) : (
         <div className="fleet-room-list">
           <button type="button" className={!roomFilter ? 'active' : ''} onClick={() => onSelectRoom('')}>
-            <span>全部电房</span><b>{fleet.filter((vehicle) => vehicle.online).length} 台在线</b>
+            <span className="fleet-room-copy">
+              <strong>全部电房</strong>
+              <small>{rooms.length} 个电房 · {roomPointCount} 个巡检点</small>
+            </span>
+            <b className="fleet-room-stats"><strong>{roomOnlineCount} 在线</strong><small>{roomReplayCount} 路回放</small></b>
           </button>
           {rooms.map((room) => {
             const related = fleet.filter((vehicle) => vehicle.roomName.includes(room.name))
+            const replayCount = room.replayVehicleIndexes?.length || 0
             return (
               <button type="button" className={roomFilter === room.name ? 'active' : ''} key={room.id} onClick={() => onSelectRoom(room.name)}>
-                <span>{room.name}</span><b>{related.filter((vehicle) => vehicle.online).length}/{related.length || 0} 台</b>
+                <span className="fleet-room-copy">
+                  <strong>{room.name}</strong>
+                  <small>{room.roomCode || 'POWER ROOM'} · {room.demoReplay ? '历史巡检3D回放' : room.location || '后端电房数据'}</small>
+                </span>
+                <b className="fleet-room-stats">
+                  <strong>{related.filter((vehicle) => vehicle.online).length} 在线 · {replayCount} 回放</strong>
+                  <small>{room.pointCount || 0} 个巡检点</small>
+                </b>
               </button>
             )
           })}
@@ -588,6 +872,7 @@ function SchoolFleetDashboard() {
 
     return Array.from({ length: FLEET_SIZE }, (_, offset) => {
       const index = offset + 1
+      const demoConfig = DEMO_REPLAY_CONFIG[index]
       const registered = registryByNumber.get(index)
       const robot = robotByNumber.get(index)
       const id = registered?.id || robot?.robotCode || `nano${index}`
@@ -615,13 +900,57 @@ function SchoolFleetDashboard() {
         replayRecord,
         results,
         abnormalCount,
-        roomName: record?.taskArea || '实验楼一层 / 演示区域',
-        taskName: activeRecord?.taskName || replayRecord?.taskName || '实验楼一演示路线',
+        roomName: record?.taskArea || demoConfig?.roomName || '实验楼一层 / 演示区域',
+        taskName: activeRecord?.taskName || replayRecord?.taskName || demoConfig?.taskName || '实验楼一演示路线',
         progress: Number(record?.progress || 0),
       }
       return { ...vehicle, status: statusMeta(vehicle) }
     })
   }, [business.records, business.results, business.robots, registeredVehicles])
+
+  const monitoredRooms = useMemo(() => {
+    const rooms = business.rooms
+      .filter((room) => room.active !== false)
+      .map((room) => ({
+        ...room,
+        pointCount: business.points.filter((point) => point.roomId === room.id).length,
+        routeCount: business.routes.filter((route) => route.roomId === room.id).length,
+        replayVehicleIndexes: [],
+      }))
+    const replayVehicleIndexes = Object.entries(DEMO_REPLAY_CONFIG)
+      .filter(([, config]) => config.map.id === hanlinRoomMap.id)
+      .map(([index]) => Number(index))
+    const replayRouteIds = new Set(Object.values(DEMO_REPLAY_CONFIG)
+      .filter((config) => config.map.id === hanlinRoomMap.id)
+      .map((config) => config.routeId))
+    const demoRoom = {
+      id: `demo-${hanlinRoomMap.id}`,
+      roomCode: 'HL-001',
+      name: hanlinRoomMap.name,
+      location: '瀚林1号电房',
+      description: '历史巡检点模拟 3D 动画数据',
+      active: true,
+      demoReplay: true,
+      pointCount: hanlinRoomMap.inspectionPoints.length,
+      routeCount: replayRouteIds.size,
+      replayVehicleIndexes,
+    }
+    const existingIndex = rooms.findIndex((room) => room.roomCode === demoRoom.roomCode || room.name === demoRoom.name)
+    if (existingIndex >= 0) {
+      const backendRoom = rooms[existingIndex]
+      rooms[existingIndex] = {
+        ...demoRoom,
+        ...backendRoom,
+        demoReplay: true,
+        pointCount: backendRoom.pointCount || demoRoom.pointCount,
+        routeCount: backendRoom.routeCount || demoRoom.routeCount,
+        replayVehicleIndexes,
+      }
+    } else {
+      rooms.push(demoRoom)
+    }
+    return rooms
+  }, [business.points, business.rooms, business.routes])
 
   const selectedVehicle = fleet.find((vehicle) => vehicle.id === selectedVehicleId) || null
   const selectedActiveTaskId = selectedVehicle?.activeRecord?.taskId || null
@@ -633,6 +962,7 @@ function SchoolFleetDashboard() {
     return fleet
       .filter((vehicle) => !roomFilter || vehicle.roomName.includes(roomFilter))
       .sort((left, right) => order[left.status.key] - order[right.status.key] || left.index - right.index)
+      .slice(0, OVERVIEW_WINDOW_LIMIT)
   }, [fleet, roomFilter])
   const gridColumns = smartGridColumns(visibleVehicles.length)
   const animatedReplayIds = useMemo(() => {
@@ -702,7 +1032,7 @@ function SchoolFleetDashboard() {
       <header className="fleet-page-header">
         <div className="fleet-title">
           <span>SCHOOL-LEVEL VEHICLE MONITORING</span>
-          <h1>{selectedVehicle ? `${selectedVehicle.label}巡检详情` : '学校级巡检车辆监控中心'}</h1>
+          <h1>{selectedVehicle ? `${selectedVehicle.label}巡检详情` : '巡检车辆监控中心'}</h1>
           <p>{selectedVehicle ? `${selectedVehicle.roomName} · ${selectedVehicle.taskName}` : '实时车辆优先显示主摄像头，其余车辆回放最近路线或实验楼一演示路线'}</p>
         </div>
         <div className="fleet-summary">
@@ -817,7 +1147,7 @@ function SchoolFleetDashboard() {
           fleet={fleet}
           selectedId={selectedVehicle?.id}
           mode={sidebarMode}
-          rooms={business.rooms}
+          rooms={monitoredRooms}
           roomFilter={roomFilter}
           onModeChange={setSidebarMode}
           onSelectVehicle={selectVehicle}

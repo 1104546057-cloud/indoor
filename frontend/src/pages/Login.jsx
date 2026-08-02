@@ -77,6 +77,8 @@ function Login() {
         saveUser({
           username: data.username,
           nickname: data.nickname || '管理员',
+          role: data.role,
+          permissions: data.permissions,
           token: data.token,
         })
         navigate('/dashboard')

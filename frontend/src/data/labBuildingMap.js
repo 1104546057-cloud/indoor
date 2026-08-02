@@ -232,6 +232,14 @@ const inspectionPoints = [
   point('LAB-P12', '西南转角', 6000, 52000, 'east', ['门状态', '消防设施']),
 ]
 
+// 巡检任务只保存需要停靠的目标点。两个目标点之间如果需要经过走廊转角，
+// 在这里补充仅用于路线绘制和回放的通行节点，避免界面用直线穿过房间。
+const routeTransitions = {
+  'LAB-P08->LAB-P09': [
+    { id: 'LAB-VIA-NORTH-CENTER', x: 50000, y: 17000 },
+  ],
+}
+
 // 完整地图数据，供新建计划预览和 3D 巡检页面共同使用。
 export const labBuildingMap = {
   id: 'lab-building-floor-1',
@@ -310,6 +318,7 @@ export const labBuildingMap = {
     { id: 'lab-entry-west', name: '西侧入口', x: 6000, y: 34500 },
   ],
   inspectionPoints,
+  routeTransitions,
   routes: [
     {
       id: 'lab-floor-loop',

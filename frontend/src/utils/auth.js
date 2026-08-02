@@ -18,6 +18,7 @@ export function saveUser(user) {
   clearUser()
   runtimeLoginConfirmed = true
   storage.setItem(USER_KEY, JSON.stringify(user))
+  window.dispatchEvent(new CustomEvent('auth-user-updated', { detail: user }))
 }
 
 export function clearUser() {
@@ -25,4 +26,5 @@ export function clearUser() {
   runtimeLoginConfirmed = false
   localStorage.removeItem(USER_KEY)
   sessionStorage.removeItem(USER_KEY)
+  window.dispatchEvent(new CustomEvent('auth-user-updated', { detail: null }))
 }

@@ -11,6 +11,17 @@
   gap: 12px;
   overflow: hidden;
   color: var(--um-text);
+  position: relative;
+}
+
+.user-console-page > .business-notice {
+  position: absolute;
+  z-index: 30;
+  top: 108px;
+  left: 12px;
+  right: 12px;
+  min-height: 38px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
 }
 
 .user-console-page * { box-sizing: border-box; }
@@ -504,13 +515,15 @@ button.user-row.selected {
 .permission-switch {
   width: 34px;
   height: 18px;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
   background: rgba(110, 134, 146, 0.5);
   box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
 }
 
-.permission-switch::after {
-  content: "";
+.permission-switch > span {
   display: block;
   width: 14px;
   height: 14px;
@@ -524,9 +537,44 @@ button.user-row.selected {
   box-shadow: 0 0 10px rgba(42, 158, 230, 0.28);
 }
 
-.permission-switch.on::after {
+.permission-switch.on > span {
   margin-left: 18px;
   background: #e8fcff;
+}
+
+.permission-switch:hover:not(:disabled) {
+  filter: brightness(1.22);
+}
+
+.permission-switch:focus-visible {
+  outline: 2px solid #8ff4ff;
+  outline-offset: 2px;
+}
+
+.permission-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.permission-switch.saving {
+  animation: permission-saving 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes permission-saving {
+  to { filter: brightness(1.6); }
+}
+
+.permission-role-select {
+  min-height: 28px;
+  padding: 0 7px;
+  border: 1px solid rgba(158, 223, 234, 0.24);
+  color: #e8fcff;
+  background: #082536;
+}
+
+.detail-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .user-bottom-grid {

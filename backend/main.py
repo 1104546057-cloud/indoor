@@ -46,6 +46,12 @@ try:
         list_recognition_devices,
         open_recognition_stream,
     )
+    from .permissions import (
+        default_permissions,
+        effective_permissions,
+        normalize_permissions,
+        require_permission,
+    )
     from .vehicle_client import (
         cancel_navigation_route,
         get_camera_info,
@@ -90,6 +96,12 @@ except ImportError:
         get_recognition_status,
         list_recognition_devices,
         open_recognition_stream,
+    )
+    from permissions import (
+        default_permissions,
+        effective_permissions,
+        normalize_permissions,
+        require_permission,
     )
     from vehicle_client import (
         cancel_navigation_route,
@@ -160,6 +172,8 @@ class LoginResponse(BaseModel):
     message: str
     username: str
     nickname: str
+    role: str
+    permissions: dict[str, dict[str, bool]]
     token: str
 
 
@@ -168,6 +182,7 @@ class CurrentUserResponse(BaseModel):
     username: str
     nickname: str
     role: str
+    permissions: dict[str, dict[str, bool]]
 
 
 class SystemUserCreate(BaseModel):
@@ -181,6 +196,10 @@ class SystemUserUpdate(BaseModel):
     nickname: str | None = None
     role: str | None = None
     is_active: bool | None = None
+
+
+class SystemUserPermissionsUpdate(BaseModel):
+    permissions: dict[str, dict[str, bool]]
 
 
 class VehicleControlRequest(BaseModel):
@@ -391,6 +410,8 @@ async def login(request: LoginRequest, response: Response, db: Session = Depends
         message="登录成功",
         username=user.username,
         nickname=user.nickname,
+        role=user.role,
+        permissions=effective_permissions(user),
         token=access_token,
     )
 
@@ -402,12 +423,8 @@ async def get_me(current_user: User = Depends(get_current_user)):
         username=current_user.username,
         nickname=current_user.nickname,
         role=current_user.role,
+        permissions=effective_permissions(current_user),
     )
-
-
-def _require_admin(user: User) -> None:
-    if user.role != 'admin':
-        raise HTTPException(status_code=403, detail='仅系统管理员可执行该操作')
 
 
 def _system_user_json(user: User) -> dict:
@@ -416,6 +433,7 @@ def _system_user_json(user: User) -> dict:
         'username': user.username,
         'nickname': user.nickname,
         'role': user.role,
+        'permissions': effective_permissions(user),
         'isActive': user.is_active,
         'createdAt': user.created_at.isoformat(sep=' ') if user.created_at else None,
         'updatedAt': user.updated_at.isoformat(sep=' ') if user.updated_at else None,
@@ -424,6 +442,7 @@ def _system_user_json(user: User) -> dict:
 
 @app.get('/api/system/users')
 def list_system_users(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    require_permission(current_user, 'user_management', 'view')
     return {'users': [_system_user_json(user) for user in db.query(User).order_by(User.id).all()]}
 
 
@@ -433,7 +452,7 @@ def create_system_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    _require_admin(current_user)
+    require_permission(current_user, 'user_management', 'create')
     username = payload.username.strip()
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=409, detail='用户名已存在')
@@ -442,6 +461,7 @@ def create_system_user(
         password_hash=password_context.hash(payload.password),
         nickname=payload.nickname.strip() or username,
         role=payload.role,
+        permissions=default_permissions(payload.role),
         is_active=True,
     )
     db.add(user)
@@ -465,7 +485,7 @@ def update_system_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    _require_admin(current_user)
+    require_permission(current_user, 'user_management', 'update')
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail='用户不存在')
@@ -473,6 +493,7 @@ def update_system_user(
         user.nickname = payload.nickname.strip() or user.username
     if payload.role is not None:
         user.role = payload.role
+        user.permissions = default_permissions(payload.role)
     if payload.is_active is not None:
         if user.id == getattr(current_user, 'id', None) and not payload.is_active:
             raise HTTPException(status_code=409, detail='不能禁用当前登录账号')
@@ -489,12 +510,44 @@ def update_system_user(
     return _system_user_json(user)
 
 
+@app.put('/api/system/users/{user_id}/permissions')
+def update_system_user_permissions(
+    user_id: int,
+    payload: SystemUserPermissionsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_permission(current_user, 'user_management', 'update')
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail='用户不存在')
+
+    permissions = normalize_permissions(user.role, payload.permissions)
+    if user.id == getattr(current_user, 'id', None):
+        user_permissions = permissions['user_management']
+        if not user_permissions['view'] or not user_permissions['update']:
+            raise HTTPException(status_code=409, detail='不能移除当前账号的用户管理查看或编辑权限')
+
+    user.permissions = permissions
+    db.add(SystemLog(
+        user_id=getattr(current_user, 'id', None),
+        username=current_user.username,
+        module='系统用户管理',
+        action='更新功能权限',
+        content=f'更新账号 {user.username} 的功能权限矩阵',
+    ))
+    db.commit()
+    db.refresh(user)
+    return _system_user_json(user)
+
+
 @app.get('/api/system/logs')
 def list_system_logs(
     limit: int = 100,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'user_management', 'view')
     logs = db.query(SystemLog).order_by(SystemLog.created_at.desc()).limit(min(max(limit, 1), 500)).all()
     return {'logs': [{
         'id': log.id,
@@ -617,6 +670,7 @@ def list_tasks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_tasks', 'view')
     tasks = (
         db.query(InspectionTask)
         .order_by(InspectionTask.created_at.desc())
@@ -632,6 +686,7 @@ def create_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_tasks', 'create')
     existing_task = db.query(InspectionTask).filter(InspectionTask.task_id == payload.id).first()
     if existing_task is not None:
         raise HTTPException(status_code=409, detail='task already exists')
@@ -669,6 +724,7 @@ def update_pending_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_tasks', 'update')
     task = db.query(InspectionTask).filter(InspectionTask.task_id == task_id).first()
     if task is None:
         raise HTTPException(status_code=404, detail='task not found')
@@ -712,6 +768,7 @@ def delete_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_tasks', 'delete')
     task = db.query(InspectionTask).filter(InspectionTask.task_id == task_id).first()
     if task is None:
         raise HTTPException(status_code=404, detail='task not found')
@@ -808,6 +865,7 @@ def list_recognition_results(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'ai_review', 'view')
     query = db.query(RecognitionResult)
     if status:
         query = query.filter(RecognitionResult.status == status)
@@ -823,6 +881,7 @@ def latest_recognition_result(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'ai_review', 'view')
     result = db.query(RecognitionResult).order_by(RecognitionResult.created_at.desc()).first()
     return {'result': _serialize_recognition_result(result) if result else None}
 
@@ -833,6 +892,7 @@ def recognition_summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'ai_review', 'view')
     all_results = db.query(RecognitionResult).all()
     total = len(all_results)
     abnormal = len([item for item in all_results if item.status in ['异常', '告警']])
@@ -849,6 +909,7 @@ def recognition_summary(
 
 @app.get("/api/recognition/devices")
 def recognition_devices(current_user: User = Depends(get_current_user)):
+    require_permission(current_user, 'ai_review', 'view')
     return list_recognition_devices()
 
 
@@ -857,6 +918,7 @@ def recognition_status(
     device_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'ai_review', 'view')
     return get_recognition_status(device_id)
 
 
@@ -865,6 +927,7 @@ def recognition_detections(
     device_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'ai_review', 'view')
     return get_recognition_detections(device_id)
 
 
@@ -873,6 +936,7 @@ def recognition_capture(
     payload: dict = Body(default_factory=dict),
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'ai_review', 'create')
     device_id = payload.get('deviceId') or payload.get('device_id')
     return capture_recognition(device_id, payload)
 
@@ -882,6 +946,7 @@ def recognition_stream(
     device_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'ai_review', 'view')
     source = open_recognition_stream(device_id)
 
     def iter_stream():
@@ -912,6 +977,7 @@ def review_recognition_result(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'ai_review', 'update')
     result = db.query(RecognitionResult).filter(RecognitionResult.result_id == result_id).first()
     if result is None:
         raise HTTPException(status_code=404, detail='识别结果不存在')
@@ -931,6 +997,7 @@ def vehicles(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_monitor', 'view')
     # 连接注册表负责网络参数，Robot 表负责业务档案和最近心跳；每次读取时进行幂等同步。
     payload = list_vehicles(force_refresh=force_refresh)
     for vehicle in payload.get('vehicles', []):
@@ -965,6 +1032,7 @@ def vehicle_status(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'view')
     # 后端只做权限校验和转发，真实车辆状态由对应 Nano 上的 vehicle_agent 提供。
     return get_vehicle_status(vehicle_id)
 
@@ -974,6 +1042,7 @@ def vehicle_connect(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'update')
     # 网页端点击“连接车”时，通过 SSH 启动所选 Nano 上的控制和摄像头常驻服务。
     return start_vehicle_services(vehicle_id)
 
@@ -983,6 +1052,7 @@ def vehicle_control(
     request: VehicleControlRequest,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'update')
     # 点击方向按钮时调用，后续按住按钮也会持续调用这个接口刷新命令时间。
     return send_vehicle_command(
         vehicle_id=request.vehicle_id,
@@ -997,6 +1067,7 @@ def vehicle_navigation_goal(
     request: NavigationGoalRequest,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'update')
     goal = {
         'frame_id': request.frame_id,
         'x': request.x,
@@ -1017,6 +1088,7 @@ def vehicle_navigation_route(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_monitor', 'update')
     if not request.goals:
         raise HTTPException(status_code=400, detail='navigation route requires at least one goal')
 
@@ -1060,6 +1132,7 @@ def vehicle_navigation_route_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_monitor', 'view')
     # 到点进度必须以车端 move_base 的结果为准，不能由网页按时间或距离推测。
     response = get_navigation_route_status(vehicle_id, execution_id)
     navigation = response.get('navigation') if isinstance(response, dict) else None
@@ -1074,6 +1147,7 @@ def vehicle_navigation_route_cancel(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(current_user, 'patrol_monitor', 'update')
     response = cancel_navigation_route(request.vehicle_id, request.execution_id)
     navigation = response.get('navigation') if isinstance(response, dict) else None
     task_id = navigation.get('task_id') if isinstance(navigation, dict) else None
@@ -1086,6 +1160,7 @@ def vehicle_stop(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'update')
     # 停止和急停都先走零速度命令；车端 agent 也有超时自动停车保护。
     return stop_vehicle(vehicle_id)
 
@@ -1096,6 +1171,7 @@ def vehicle_camera(
     camera_role: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'view')
     # 第一版摄像头由 Nano 直接提供 MJPEG，前端拿到地址后用 img 显示。
     return get_camera_info(vehicle_id, camera_role)
 
@@ -1106,6 +1182,7 @@ def vehicle_camera_stream(
     camera_role: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'view')
     # 浏览器可能拦截直接访问 Nano 私网 IP 的 MJPEG 图片流，因此这里转成同源代理流。
     source = open_camera_stream(vehicle_id, camera_role)
 
@@ -1135,5 +1212,6 @@ def vehicle_lidar(
     vehicle_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ):
+    require_permission(current_user, 'patrol_monitor', 'view')
     # 雷达由 Nano 上的小桥接服务把 ROS /lidar/scan 转成 WebSocket JSON。
     return get_lidar_info(vehicle_id)

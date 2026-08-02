@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
+import PermissionGuard from './components/PermissionGuard'
 import MainLayout from './layouts/MainLayout'
 import Login from './pages/Login'
 
@@ -30,13 +31,13 @@ function App() {
       >
         {/* 访问根路径时自动进入数据看板。 */}
         <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
-        <Route path="users" element={<UserManagement />} />
-        <Route path="devices" element={<DeviceManagement />} />
-        <Route path="device-control" element={<DeviceControl />} />
-        <Route path="patrol-3d" element={<PatrolExecution3D />} />
-        <Route path="cluster" element={<ClusterManagement />} />
-        <Route path="cluster-control" element={<ClusterControl />} />
+        <Route path="dashboard" element={<PermissionGuard module="patrol_monitor"><Dashboard /></PermissionGuard>} />
+        <Route path="users" element={<PermissionGuard module="user_management"><UserManagement /></PermissionGuard>} />
+        <Route path="devices" element={<PermissionGuard module="device_resources"><DeviceManagement /></PermissionGuard>} />
+        <Route path="device-control" element={<PermissionGuard module="patrol_monitor"><DeviceControl /></PermissionGuard>} />
+        <Route path="patrol-3d" element={<PermissionGuard module="patrol_tasks"><PatrolExecution3D /></PermissionGuard>} />
+        <Route path="cluster" element={<PermissionGuard module="device_resources"><ClusterManagement /></PermissionGuard>} />
+        <Route path="cluster-control" element={<PermissionGuard module="patrol_tasks"><ClusterControl /></PermissionGuard>} />
       </Route>
 
       {/* 未匹配路径回到登录页。 */}

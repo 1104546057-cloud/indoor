@@ -2,30 +2,31 @@
 import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { clearUser, getStoredUser } from '../utils/auth'
+import { hasPermission } from '../utils/permissions'
 import '../styles/MainLayout.css'
 
 const primaryNav = [
-  { label: '室内巡检监控', path: '/dashboard', match: ['/dashboard', '/device-control'] },
-  { label: '设备管理', path: '/devices', match: ['/devices', '/cluster'] },
-  { label: '巡检任务管理', path: '/cluster-control', match: ['/cluster-control', '/patrol-3d'] },
-  { label: '系统用户管理', path: '/users', match: ['/users'] },
+  { label: '室内巡检监控', path: '/dashboard', match: ['/dashboard', '/device-control'], module: 'patrol_monitor' },
+  { label: '设备管理', path: '/devices', match: ['/devices', '/cluster'], module: 'device_resources' },
+  { label: '巡检任务管理', path: '/cluster-control', match: ['/cluster-control', '/patrol-3d'], module: 'patrol_tasks' },
+  { label: '系统用户管理', path: '/users', match: ['/users'], module: 'user_management' },
 ]
 
 const settingsGroups = [
   {
     title: '系统管理',
     items: [
-      { label: '设备管理', path: '/devices', icon: 'device' },
-      { label: '巡检任务管理', path: '/cluster', icon: 'cluster' },
-      { label: '系统用户管理', path: '/users', icon: 'users' },
+      { label: '设备管理', path: '/devices', icon: 'device', module: 'device_resources' },
+      { label: '巡检任务管理', path: '/cluster', icon: 'cluster', module: 'device_resources' },
+      { label: '系统用户管理', path: '/users', icon: 'users', module: 'user_management' },
     ],
   },
   {
     title: '巡检监控',
     items: [
-      { label: '室内巡检监控', path: '/dashboard', icon: 'home' },
-      { label: '设备控制', path: '/device-control', icon: 'control' },
-      { label: '巡检任务管理', path: '/cluster-control', icon: 'layers' },
+      { label: '室内巡检监控', path: '/dashboard', icon: 'home', module: 'patrol_monitor' },
+      { label: '设备控制', path: '/device-control', icon: 'control', module: 'patrol_monitor' },
+      { label: '巡检任务管理', path: '/cluster-control', icon: 'layers', module: 'patrol_tasks' },
     ],
   },
 ]
@@ -65,7 +66,18 @@ function MainLayout() {
   const [isCockpitImmersive, setIsCockpitImmersive] = useState(true)
   const navigate = useNavigate()
   const location = useLocation()
-  const user = useMemo(() => getStoredUser() || {}, [])
+  const [user, setUser] = useState(() => getStoredUser() || {})
+  const visiblePrimaryNav = useMemo(() => primaryNav.filter((item) => hasPermission(user, item.module)), [user])
+  const visibleSettingsGroups = useMemo(() => settingsGroups
+    .map((group) => ({ ...group, items: group.items.filter((item) => hasPermission(user, item.module)) }))
+    .filter((group) => group.items.length > 0), [user])
+  const defaultAuthorizedPath = visiblePrimaryNav[0]?.path || '/dashboard'
+
+  useEffect(() => {
+    const refreshUser = (event) => setUser(event.detail || getStoredUser() || {})
+    window.addEventListener('auth-user-updated', refreshUser)
+    return () => window.removeEventListener('auth-user-updated', refreshUser)
+  }, [])
 
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000)
@@ -156,7 +168,7 @@ function MainLayout() {
                 <AppIcon name="control" />
               </button>
             )}
-            <button className="header-tool" onClick={() => navigate('/dashboard')} title="首页"><AppIcon name="home" /></button>
+            <button className="header-tool" onClick={() => navigate(defaultAuthorizedPath)} title="首页"><AppIcon name="home" /></button>
             <button className={`header-tool ${showSettings ? 'active' : ''}`} onClick={() => { setShowSettings((value) => !value); setShowAccount(false) }} title="设置"><AppIcon name="settings" /></button>
             <button className="header-tool" onClick={toggleFullscreen} title={isFullscreen ? '退出全屏' : '进入全屏'}><AppIcon name={isFullscreen ? 'collapse' : 'fullscreen'} /></button>
             <button className={`header-tool avatar-tool ${showAccount ? 'active' : ''}`} onClick={() => { setShowAccount((value) => !value); setShowSettings(false) }} title="账户">
@@ -166,7 +178,7 @@ function MainLayout() {
           </div>
 
           <nav className="primary-nav" aria-label="一级导航">
-            {primaryNav.map((item) => {
+            {visiblePrimaryNav.map((item) => {
               const active = item.match.some((prefix) => matchesNavPath(location.pathname, prefix))
               return <NavLink key={item.path} to={item.path} className={`primary-nav-item ${active ? 'active' : ''}`}>{item.label}</NavLink>
             })}
@@ -180,7 +192,7 @@ function MainLayout() {
               <button onClick={() => setShowSettings(false)}>×</button>
             </div>
             <div className="settings-groups">
-              {settingsGroups.map((group) => (
+              {visibleSettingsGroups.map((group) => (
                 <section key={group.title}>
                   <h3>{group.title}</h3>
                   <div className="settings-grid">
@@ -204,7 +216,7 @@ function MainLayout() {
               <span className="account-avatar"><AppIcon name="user" size={22} /></span>
               <div><strong>{user.nickname || user.username || '管理员'}</strong><small>系统管理员 · 在线</small></div>
             </div>
-            <button onClick={() => { navigate('/users'); setShowAccount(false) }}><AppIcon name="users" /><span>用户管理</span></button>
+            {hasPermission(user, 'user_management') ? <button onClick={() => { navigate('/users'); setShowAccount(false) }}><AppIcon name="users" /><span>用户管理</span></button> : null}
             <button className="danger" onClick={handleLogout}><AppIcon name="logout" /><span>退出登录</span></button>
           </div>
         )}

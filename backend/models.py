@@ -43,6 +43,9 @@ class User(Base):
     # 用户角色字段，后续可以扩展 admin/operator/viewer 等权限。
     role: Mapped[str] = mapped_column(String(30), nullable=False, default='admin')
 
+    # 用户级功能权限覆盖；为空时按角色默认权限计算。
+    permissions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # 是否启用账号；禁用后登录接口会返回 403。
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

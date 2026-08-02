@@ -580,3 +580,28 @@
 .main-layout.cockpit-layout {
   background: #071b25;
 }
+.route-access-denied {
+  min-height: 420px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  border: 1px solid rgba(92, 204, 224, 0.25);
+  color: #dffaff;
+  background: radial-gradient(circle at center, rgba(21, 101, 124, 0.28), rgba(3, 22, 34, 0.92) 60%);
+  text-align: center;
+}
+
+.route-access-denied span {
+  color: #ff8b7c;
+  font: 800 12px "Courier New", monospace;
+  letter-spacing: 3px;
+}
+
+.route-access-denied h1,
+.route-access-denied p { margin: 0; }
+
+.route-access-denied p {
+  color: #83adb6;
+  font-size: 13px;
+}

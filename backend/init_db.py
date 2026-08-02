@@ -165,6 +165,9 @@ def migrate_device_management_schema():
     """为未使用 Alembic 的旧部署补齐设备管理新增字段。"""
 
     definitions = {
+        'users': {
+            'permissions': 'JSON NULL',
+        },
         'tb_device_item': {
             'recognition_type': 'VARCHAR(50) NULL',
             'camera_role': 'VARCHAR(30) NULL',

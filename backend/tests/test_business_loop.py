@@ -516,6 +516,17 @@ def test_system_user_and_audit_log_are_persisted():
     assert created.status_code == 200
     assert created.json()['role'] == 'operator'
     assert created.json()['isActive'] is True
+    assert created.json()['permissions']['device_resources']['view'] is True
+    assert created.json()['permissions']['device_resources']['delete'] is False
+
+    permissions = created.json()['permissions']
+    permissions['device_resources']['delete'] = True
+    permission_updated = client.put(
+        f"/api/system/users/{created.json()['id']}/permissions",
+        json={'permissions': permissions},
+    )
+    assert permission_updated.status_code == 200
+    assert permission_updated.json()['permissions']['device_resources']['delete'] is True
 
     users = client.get('/api/system/users')
     assert users.status_code == 200
@@ -531,6 +542,7 @@ def test_system_user_and_audit_log_are_persisted():
     logs = client.get('/api/system/logs').json()['logs']
     assert any(log['action'] == '新增用户' and 'operator1' in log['content'] for log in logs)
     assert any(log['action'] == '更新用户' and 'operator1' in log['content'] for log in logs)
+    assert any(log['action'] == '更新功能权限' and 'operator1' in log['content'] for log in logs)
 
 
 def test_device_management_crud_visual_roi_and_controlled_delete():
