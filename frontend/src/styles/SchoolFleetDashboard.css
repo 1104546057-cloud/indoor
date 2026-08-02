@@ -370,6 +370,84 @@
   object-fit: cover;
 }
 
+.fleet-replay-3d,
+.fleet-replay-static {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.fleet-replay-3d canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.fleet-replay-static {
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 55% 35%, rgba(36, 126, 145, 0.22), transparent 48%),
+    #021019;
+}
+
+.fleet-replay-static svg {
+  width: 92%;
+  height: 88%;
+  overflow: visible;
+  filter: drop-shadow(0 12px 14px rgba(0, 0, 0, 0.54));
+  transform: perspective(620px) rotateX(58deg) rotateZ(-7deg) scale(0.88);
+  transform-origin: center;
+}
+
+.replay-static-floor { fill: #082936; stroke: #26798a; stroke-width: 180px; }
+.replay-static-hall { fill: #154756; stroke: #438798; stroke-width: 130px; }
+.replay-static-corridor { stroke: #176174; stroke-linecap: square; }
+.replay-static-wall { stroke: #7fd5df; opacity: 0.68; }
+.replay-static-route { fill: none; stroke: #48f0c7; stroke-width: 460px; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 350px rgba(72, 240, 199, 0.75)); }
+.replay-static-point { fill: #0a778b; stroke: #8ff8ff; stroke-width: 220px; }
+.replay-static-car circle { fill: rgba(255, 196, 92, 0.22); stroke: #ffc45c; stroke-width: 240px; }
+.replay-static-car path { fill: #ffc45c; }
+
+.fleet-replay-static > span {
+  position: absolute;
+  right: 7px;
+  bottom: 6px;
+  color: rgba(112, 184, 196, 0.62);
+  font: 700 8px "Courier New", monospace;
+  letter-spacing: 1px;
+}
+
+.fleet-replay-monitor header em {
+  color: var(--fleet-cyan);
+}
+
+.fleet-replay-monitor.is-animated header i {
+  background: var(--fleet-cyan);
+  animation: fleet-replay-pulse 1.4s ease-in-out infinite;
+}
+
+.fleet-replay-monitor.is-static header i {
+  background: #63818a;
+}
+
+.fleet-replay-mode-label {
+  position: absolute;
+  z-index: 3;
+  left: 7px;
+  bottom: 7px;
+  padding: 3px 6px;
+  color: #a9dfe5;
+  background: rgba(2, 17, 26, 0.82);
+  border: 1px solid rgba(83, 189, 204, 0.18);
+  font-size: 9px;
+}
+
+@keyframes fleet-replay-pulse {
+  0%, 100% { opacity: 0.42; box-shadow: 0 0 4px var(--fleet-cyan); }
+  50% { opacity: 1; box-shadow: 0 0 12px var(--fleet-cyan); }
+}
+
 .fleet-camera-placeholder {
   display: grid;
   justify-items: center;
@@ -717,6 +795,35 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+.fleet-detail-replay {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 clamp(260px, 38vh, 390px);
+  min-height: 0;
+}
+
+.fleet-detail-replay .fleet-camera {
+  width: 100%;
+  height: 100%;
+}
+
+.fleet-camera.is-full-replay {
+  grid-template-rows: 38px minmax(0, 1fr) 38px;
+  border-color: rgba(77, 225, 224, 0.34);
+  box-shadow: inset 0 0 30px rgba(52, 211, 205, 0.05);
+}
+
+.fleet-camera.is-full-replay header strong {
+  font-size: 14px;
+}
+
+.fleet-camera.is-full-replay .fleet-replay-mode-label {
+  left: 12px;
+  bottom: 12px;
+  padding: 5px 9px;
+  font-size: 11px;
 }
 
 .fleet-detail-bottom {

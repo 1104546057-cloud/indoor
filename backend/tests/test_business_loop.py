@@ -419,6 +419,93 @@ def test_task_route_point_arrival_direction_is_persisted():
     assert deleted.status_code == 200
 
 
+def test_only_unexecuted_task_can_be_edited():
+    task_id = f'task-edit-{uuid4().hex}'
+    created = client.post('/api/tasks', json={
+        'id': task_id,
+        'sceneId': 'lab-building',
+        'name': '编辑前任务',
+        'area': '实验楼一层 / 环形走廊',
+        'robot': 'nano1',
+        'pointIds': ['LAB-FREE-001'],
+        'routePoints': [{
+            'id': 'LAB-FREE-001',
+            'name': '自由点1',
+            'targetName': '自由点1',
+            'x': 28000,
+            'y': 17000,
+            'direction': 'east',
+            'yaw': 'east',
+        }],
+        'start': '2026-08-01 10:00',
+        'status': '待执行',
+        'priority': '高',
+        'detail': {'pointTotal': 1},
+    })
+    assert created.status_code == 200
+
+    updated = client.put(f'/api/tasks/{task_id}', json={
+        'id': task_id,
+        'sceneId': 'lab-building',
+        'name': '编辑后任务',
+        'area': '实验楼一层 / 环形走廊',
+        'robot': 'nano2',
+        'pointIds': ['LAB-FREE-002', 'LAB-FREE-003'],
+        'routePoints': [
+            {
+                'id': 'LAB-FREE-002',
+                'name': '自由点2',
+                'targetName': '自由点2',
+                'x': 42000,
+                'y': 17000,
+                'direction': 'south',
+                'yaw': 'south',
+            },
+            {
+                'id': 'LAB-FREE-003',
+                'name': '自由点3',
+                'targetName': '自由点3',
+                'x': 42000,
+                'y': 32000,
+                'direction': 'west',
+                'yaw': 'west',
+            },
+        ],
+        'start': '2026-08-01 11:30',
+        'status': '待执行',
+        'priority': '紧急',
+        'detail': {'pointTotal': 2},
+    })
+    assert updated.status_code == 200
+    edited_task = updated.json()['task']
+    assert edited_task['id'] == task_id
+    assert edited_task['name'] == '编辑后任务'
+    assert edited_task['robot'] == 'nano2'
+    assert edited_task['start'] == '2026-08-01 11:30'
+    assert edited_task['priority'] == '紧急'
+    assert [point['id'] for point in edited_task['routePoints']] == ['LAB-FREE-002', 'LAB-FREE-003']
+    assert [point['direction'] for point in edited_task['routePoints']] == ['south', 'west']
+
+    with SessionLocal() as db:
+        stored_task = db.query(main_module.InspectionTask).filter(
+            main_module.InspectionTask.task_id == task_id
+        ).first()
+        stored_task.status = '执行中'
+        db.commit()
+
+    rejected = client.put(f'/api/tasks/{task_id}', json={**edited_task, 'name': '不允许修改'})
+    assert rejected.status_code == 409
+
+    with SessionLocal() as db:
+        stored_task = db.query(main_module.InspectionTask).filter(
+            main_module.InspectionTask.task_id == task_id
+        ).first()
+        stored_task.status = '待执行'
+        db.commit()
+    deleted = client.delete(f'/api/tasks/{task_id}')
+    assert deleted.status_code == 200
+
+
 def test_system_user_and_audit_log_are_persisted():
     created = client.post('/api/system/users', json={
         'username': 'operator1',

@@ -224,7 +224,7 @@ const initialTasks = [
       { title: '开关状态', value: '合闸', confidence: '96.1%', time: '23:22:03', status: '正常', visual: 'digital' },
     ],
   },
-]
+].map((task) => ({ ...task, source: 'demo' }))
 
 const wholeRoomScope = {
   id: 'whole-room',
@@ -370,7 +370,7 @@ function createTaskFromForm(form) {
     name: form.name.trim() || '新增巡检计划',
     area: form.area,
     robot: form.robot,
-    routeId: `custom-${form.areaId}`,
+    routeId: form.routeId || `custom-${form.areaId}`,
     pointIds: selectedPointIds,
     routePoints,
     start,
@@ -413,6 +413,20 @@ async function saveTask(task) {
   return data.task || task
 }
 
+async function updateSavedTask(task) {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(task),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.detail || 'task update failed')
+  }
+  return data.task || task
+}
+
 async function deleteSavedTask(taskId) {
   const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: 'DELETE',
@@ -441,6 +455,49 @@ function getAreaForm(area = wholeRoomScope) {
     routePoints: [],
     pointDirections: {},
     priority: area.priority,
+  }
+}
+
+function getTaskPlanForm(task) {
+  const sceneId = task.sceneId || 'lab-building'
+  const mapData = getSceneMap(sceneId)
+  const fallbackCount = task.detail?.pointTotal || mapData.inspectionPoints.length
+  const sourcePoints = task.routePoints?.length
+    ? task.routePoints
+    : task.pointIds?.length
+      ? task.pointIds.map((pointId) => allInspectionPointById[pointId]).filter(Boolean)
+      : mapData.inspectionPoints.slice(0, fallbackCount)
+  const routePoints = sourcePoints.map((point, index) => {
+    const pointId = point.id || point.pointId || `${sceneId}-edit-${index + 1}`
+    const direction = getPlanPointDirection(point)
+    return {
+      ...point,
+      id: pointId,
+      name: point.name || point.pointName || point.targetName || `巡检点${index + 1}`,
+      targetName: point.targetName || point.name || point.pointName || `巡检点${index + 1}`,
+      direction,
+      yaw: direction,
+    }
+  })
+  const [startDate = '', rawStartTime = ''] = String(task.start || '').split(' ')
+  const schedule = getCurrentPlanSchedule()
+
+  return {
+    name: task.name || '未命名巡检任务',
+    sceneId,
+    roomId: mapData.id,
+    areaId: task.routeId?.replace(/^custom-/, '') || wholeRoomScope.id,
+    area: task.area || `${mapData.name} / 环形走廊`,
+    robot: task.robot || wholeRoomScope.robot,
+    routeId: task.routeId || `custom-${wholeRoomScope.id}`,
+    startDate: startDate || schedule.startDate,
+    startTime: rawStartTime.slice(0, 5) || schedule.startTime,
+    selectedPointIds: routePoints.map((point) => point.id),
+    routePoints,
+    pointDirections: Object.fromEntries(
+      routePoints.map((point) => [point.id, getPlanPointDirection(point)]),
+    ),
+    priority: task.priority || wholeRoomScope.priority,
   }
 }
 
@@ -1811,6 +1868,138 @@ function PlanRoutePreview({
   )
 }
 
+function InteractiveRouteMap({ taskId, pointIds, routePoints, mapData, vehiclePose = null }) {
+  const viewportRef = useRef(null)
+  const dragRef = useRef(null)
+  const [view, setView] = useState({ scale: 1, x: 0, y: 0 })
+
+  useEffect(() => {
+    setView({ scale: 1, x: 0, y: 0 })
+  }, [taskId])
+
+  const zoomAt = (nextScale, anchorX, anchorY) => {
+    setView((current) => {
+      const scale = Math.max(0.75, Math.min(4, nextScale))
+      if (scale === current.scale) return current
+      const rect = viewportRef.current?.getBoundingClientRect()
+      const centerX = anchorX ?? (rect?.width || 0) / 2
+      const centerY = anchorY ?? (rect?.height || 0) / 2
+      const ratio = scale / current.scale
+      return {
+        scale,
+        x: centerX - (centerX - current.x) * ratio,
+        y: centerY - (centerY - current.y) * ratio,
+      }
+    })
+  }
+
+  const handleWheel = (event) => {
+    event.preventDefault()
+    const rect = viewportRef.current.getBoundingClientRect()
+    const direction = event.deltaY < 0 ? 1.16 : 1 / 1.16
+    zoomAt(view.scale * direction, event.clientX - rect.left, event.clientY - rect.top)
+  }
+
+  const handlePointerDown = (event) => {
+    if (event.button !== 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, originX: view.x, originY: view.y }
+  }
+
+  const handlePointerMove = (event) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    setView((current) => ({
+      ...current,
+      x: drag.originX + event.clientX - drag.x,
+      y: drag.originY + event.clientY - drag.y,
+    }))
+  }
+
+  const finishDrag = (event) => {
+    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null
+  }
+
+  const reset = () => setView({ scale: 1, x: 0, y: 0 })
+
+  return (
+    <div
+      ref={viewportRef}
+      className="task-route-panzoom"
+      onWheel={handleWheel}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
+      onDoubleClick={reset}
+    >
+      <div
+        className="task-route-panzoom-content"
+        style={{ transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})` }}
+      >
+        <PlanRoutePreview
+          compact
+          pointIds={pointIds}
+          routePoints={routePoints}
+          mapData={mapData}
+          vehiclePose={vehiclePose}
+          showRoute
+        />
+      </div>
+      <div className="task-route-zoom-controls" onPointerDown={(event) => event.stopPropagation()}>
+        <button type="button" aria-label="缩小路线图" onClick={() => zoomAt(view.scale / 1.2)}>−</button>
+        <b>{Math.round(view.scale * 100)}%</b>
+        <button type="button" aria-label="放大路线图" onClick={() => zoomAt(view.scale * 1.2)}>＋</button>
+        <button type="button" className="reset" onClick={reset}>复位</button>
+      </div>
+      <span className="task-route-gesture-tip">按住拖动 · 滚轮缩放 · 双击复位</span>
+    </div>
+  )
+}
+
+function TaskActionButtons({ task, onAction, onMonitor, onEdit, onDelete, variant = 'row' }) {
+  const modal = variant === 'modal'
+  return (
+    <div className={modal ? 'task-detail-modal-actions' : 'row-actions'}>
+      {task.status === '待执行' && (
+        <>
+          <button type="button" className="action-edit" onClick={(event) => onEdit(event, task)}>{modal ? '编辑任务' : '编辑'}</button>
+          <button type="button" className="action-start" onClick={(event) => onAction(event, task, 'start')}>{modal ? '开始任务' : '开始'}</button>
+        </>
+      )}
+      {task.status === '执行中' && (
+        <>
+          <button type="button" className="action-start" onClick={(event) => onMonitor(event, task)}>{modal ? '实时监控' : '监控'}</button>
+          <button type="button" className="action-remote" onClick={(event) => onAction(event, task, 'remote')}>遥控</button>
+          <button type="button" onClick={(event) => onAction(event, task, 'pause')}>{modal ? '暂停任务' : '暂停'}</button>
+        </>
+      )}
+      {task.status === '异常' && (
+        <>
+          <button type="button" className="action-alarm" onClick={(event) => onAction(event, task, 'inspect')}>{modal ? '异常详情' : '异常'}</button>
+          <button type="button" onClick={(event) => onAction(event, task, 'review')}>{modal ? '提交复核' : '复核'}</button>
+        </>
+      )}
+      {task.status === '已完成' && (
+        <>
+          <button type="button" onClick={(event) => onAction(event, task, 'record')}>{modal ? '巡检记录' : '记录'}</button>
+          <button type="button" onClick={(event) => onAction(event, task, 'report')}>{modal ? '巡检报告' : '报告'}</button>
+        </>
+      )}
+      {task.status === '待审核' && (
+        <button type="button" className="action-start" onClick={(event) => onAction(event, task, 'resume')}>{modal ? '继续任务' : '继续'}</button>
+      )}
+      <button
+        type="button"
+        className="action-delete"
+        disabled={task.status === '执行中'}
+        title={task.status === '执行中' ? '请先暂停任务，再执行删除' : '删除任务'}
+        onClick={(event) => onDelete(event, task)}
+      >{modal ? '删除任务' : '删除'}</button>
+    </div>
+  )
+}
+
 function ClusterControl() {
   const navigate = useNavigate()
   const {
@@ -1822,8 +2011,10 @@ function ClusterControl() {
   const [activeTab, setActiveTab] = useState('plan')
   const [taskList, setTaskList] = useState(initialTasks)
   const [selectedTaskId, setSelectedTaskId] = useState(initialTasks[0].id)
+  const [detailTaskId, setDetailTaskId] = useState(null)
   const [actionNotice, setActionNotice] = useState('点击任务行查看执行详情，或使用右侧操作推进任务状态。')
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState(null)
   const [planForm, setPlanForm] = useState(() => ({
     ...defaultPlanForm,
     ...getCurrentPlanSchedule(),
@@ -1894,6 +2085,26 @@ function ClusterControl() {
     () => taskList.find((task) => task.id === selectedTaskId) || taskList[0],
     [selectedTaskId, taskList],
   )
+  const detailTask = useMemo(
+    () => taskList.find((task) => task.id === detailTaskId) || null,
+    [detailTaskId, taskList],
+  )
+  const detailTaskMap = getSceneMap(detailTask?.sceneId || 'lab-building')
+  const detailRoutePoints = useMemo(() => {
+    if (!detailTask) return []
+    if (detailTask.routePoints?.length) return detailTask.routePoints
+    if (detailTask.pointIds?.length) {
+      return detailTask.pointIds.map((pointId) => allInspectionPointById[pointId]).filter(Boolean)
+    }
+    return detailTaskMap.inspectionPoints.slice(0, detailTask.detail?.pointTotal || detailTaskMap.inspectionPoints.length)
+  }, [detailTask, detailTaskMap])
+  const detailStoredResults = useMemo(
+    () => detailTask ? storedResults.filter((result) => result.taskId === detailTask.id) : [],
+    [detailTask, storedResults],
+  )
+  const detailAiItems = detailStoredResults.length > 0
+    ? detailStoredResults.map(mapStoredResultToPreview)
+    : (detailTask?.aiPreview || [])
   const selectedTaskResults = useMemo(() => (
     storedResults.filter((result) => result.taskId === selectedTask.id).slice(0, 3)
   ), [selectedTask.id, storedResults])
@@ -1981,6 +2192,15 @@ function ClusterControl() {
   }, [activeTab])
 
   useEffect(() => subscribeInspectionResults(setStoredResults), [])
+
+  useEffect(() => {
+    if (!detailTaskId) return undefined
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setDetailTaskId(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [detailTaskId])
 
   useEffect(() => {
     let cancelled = false
@@ -2137,8 +2357,19 @@ function ClusterControl() {
     setActionNotice(notice)
   }
 
+  const openTaskDetail = (task) => {
+    setSelectedTaskId(task.id)
+    setDetailTaskId(task.id)
+  }
+
   const handleDeleteTask = async (event, task) => {
     event.stopPropagation()
+
+    if (task.status === '执行中') {
+      setActionNotice(`${task.name} 正在执行，请先暂停任务再删除。`)
+      return
+    }
+    if (!window.confirm(`确认删除任务“${task.name}”吗？删除后无法恢复。`)) return
 
     try {
       if (task.source !== 'demo') {
@@ -2150,6 +2381,7 @@ function ClusterControl() {
         setSelectedTaskId((currentId) => (currentId === task.id ? nextTasks[0]?.id : currentId))
         return nextTasks
       })
+      setDetailTaskId((currentId) => (currentId === task.id ? null : currentId))
       setActionNotice(`${task.name} 已删除。`)
     } catch (error) {
       setSelectedTaskId(task.id)
@@ -2157,8 +2389,16 @@ function ClusterControl() {
     }
   }
 
+  const closePlanModal = () => {
+    setIsPlanModalOpen(false)
+    setEditingTaskId(null)
+    setPlanStep(1)
+    setShowSlamMap(false)
+  }
+
   const openPlanModal = (areaTemplate) => {
     const currentSchedule = getCurrentPlanSchedule()
+    setEditingTaskId(null)
 
     if (areaTemplate) {
       setPlanForm({
@@ -2172,6 +2412,22 @@ function ClusterControl() {
       })
     }
 
+    setPlanStep(1)
+    setShowSlamMap(false)
+    setIsPlanModalOpen(true)
+  }
+
+  const openEditTask = (event, task) => {
+    event?.stopPropagation()
+    if (task.status !== '待执行' || Number(task.progress || 0) > 0) {
+      setActionNotice(`${task.name} 已经启动，不能再修改任务参数和路线。`)
+      return
+    }
+
+    setSelectedTaskId(task.id)
+    setDetailTaskId(null)
+    setEditingTaskId(task.id)
+    setPlanForm(getTaskPlanForm(task))
     setPlanStep(1)
     setShowSlamMap(false)
     setIsPlanModalOpen(true)
@@ -2318,28 +2574,58 @@ function ClusterControl() {
     event.preventDefault()
     const selectedCount = activePlanRoutePoints.length
     if (selectedCount === 0) {
-      setActionNotice('请至少选择 1 个巡检点后再创建任务。')
+      setActionNotice(`请至少选择 1 个巡检点后再${editingTaskId ? '保存任务' : '创建任务'}。`)
       setPlanStep(2)
       return
     }
 
-    const newTask = createTaskFromForm(planForm)
-    let savedTask
-
-    try {
-      savedTask = await saveTask(newTask)
-    } catch (error) {
-      console.error('save task failed', error)
-      setActionNotice(`任务保存失败：${error.message}`)
+    const originalTask = editingTaskId
+      ? taskList.find((task) => task.id === editingTaskId)
+      : null
+    if (editingTaskId && (!originalTask || originalTask.status !== '待执行' || Number(originalTask.progress || 0) > 0)) {
+      setActionNotice('任务状态已经变化，当前任务不能继续编辑。')
+      closePlanModal()
       return
     }
 
-    setTaskList((currentTasks) => [savedTask, ...currentTasks.filter((task) => task.id !== savedTask.id)])
+    const generatedTask = createTaskFromForm(planForm)
+    const newTask = originalTask
+      ? {
+          ...originalTask,
+          ...generatedTask,
+          id: originalTask.id,
+          source: originalTask.source,
+        }
+      : generatedTask
+    let savedTask
+
+    try {
+      if (originalTask) {
+        savedTask = originalTask.source === 'demo'
+          ? newTask
+          : { ...newTask, ...await updateSavedTask(newTask) }
+      } else {
+        savedTask = await saveTask(newTask)
+      }
+    } catch (error) {
+      console.error(originalTask ? 'update task failed' : 'save task failed', error)
+      setActionNotice(`任务${originalTask ? '更新' : '保存'}失败：${error.message}`)
+      return
+    }
+
+    setTaskList((currentTasks) => (
+      originalTask
+        ? currentTasks.map((task) => (task.id === savedTask.id ? savedTask : task))
+        : [savedTask, ...currentTasks.filter((task) => task.id !== savedTask.id)]
+    ))
     setSelectedTaskId(savedTask.id)
     setActiveTab('plan')
-    setIsPlanModalOpen(false)
-    setPlanStep(1)
-    setActionNotice(`${newTask.name} 已创建，状态为待执行，可直接点击“开始”。`)
+    closePlanModal()
+    setActionNotice(
+      originalTask
+        ? `${savedTask.name} 已保存修改，任务 ID 保持不变。`
+        : `${newTask.name} 已创建，状态为待执行，可直接点击“开始”。`,
+    )
   }
 
   const sendTaskNavigationRoute = async (task) => {
@@ -2458,6 +2744,13 @@ function ClusterControl() {
       setSelectedTaskId(task.id)
       setActiveTab('report')
       setActionNotice(`${task.name} 已进入报告生成流程。`)
+    }
+  }
+
+  const handleDetailTaskAction = (event, task, action) => {
+    handleTaskAction(event, task, action)
+    if (['remote', 'inspect', 'review', 'record', 'report'].includes(action)) {
+      setDetailTaskId(null)
     }
   }
 
@@ -2708,11 +3001,11 @@ function ClusterControl() {
                       data-task-id={task.id}
                       className={`task-table-row${selectedTask.id === task.id ? ' selected' : ''}`}
                       key={task.id}
-                      onClick={() => setSelectedTaskId(task.id)}
+                      onClick={() => openTaskDetail(task)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault()
-                          setSelectedTaskId(task.id)
+                          openTaskDetail(task)
                         }
                       }}
                     >
@@ -2722,34 +3015,13 @@ function ClusterControl() {
                       <span>{task.start}</span>
                       <TaskStatus status={task.status} />
                       <ProgressBar value={task.progress} status={task.status} />
-                      <div className="row-actions">
-                        {task.status === '待执行' && (
-                          <button type="button" className="action-start" onClick={(event) => handleTaskAction(event, task, 'start')}>开始</button>
-                        )}
-                        {task.status === '执行中' && (
-                          <>
-                            <button type="button" className="action-start" onClick={(event) => { event.stopPropagation(); openLivePatrolMonitor(task) }}>监控</button>
-                            <button type="button" className="action-remote" onClick={(event) => handleTaskAction(event, task, 'remote')}>遥控</button>
-                            <button type="button" onClick={(event) => handleTaskAction(event, task, 'pause')}>暂停</button>
-                          </>
-                        )}
-                        {task.status === '异常' && (
-                          <>
-                            <button type="button" className="action-alarm" onClick={(event) => handleTaskAction(event, task, 'inspect')}>异常</button>
-                            <button type="button" onClick={(event) => handleTaskAction(event, task, 'review')}>复核</button>
-                          </>
-                        )}
-                        {task.status === '已完成' && (
-                          <>
-                            <button type="button" onClick={(event) => handleTaskAction(event, task, 'record')}>记录</button>
-                            <button type="button" onClick={(event) => handleTaskAction(event, task, 'report')}>报告</button>
-                          </>
-                        )}
-                        {task.status === '待审核' && (
-                          <button type="button" className="action-start" onClick={(event) => handleTaskAction(event, task, 'resume')}>继续</button>
-                        )}
-                        <button type="button" className="action-delete" onClick={(event) => handleDeleteTask(event, task)}>删除</button>
-                      </div>
+                      <TaskActionButtons
+                        task={task}
+                        onAction={handleTaskAction}
+                        onMonitor={(event, currentTask) => { event.stopPropagation(); openLivePatrolMonitor(currentTask) }}
+                        onEdit={openEditTask}
+                        onDelete={handleDeleteTask}
+                      />
                     </div>
                   ))}
                 </div>
@@ -2947,15 +3219,158 @@ function ClusterControl() {
       </div>}
       </>}
 
+      {detailTask && (
+        <div
+          className="task-modal-backdrop task-detail-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setDetailTaskId(null)
+          }}
+        >
+          <section className="task-detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-modal-title">
+            <header className="task-detail-modal-head">
+              <div>
+                <span className="task-kicker">PATROL TASK DETAIL</span>
+                <h2 id="task-detail-modal-title">{detailTask.name}</h2>
+                <p>{detailTask.area} · {detailTask.robot} · {detailTask.start}</p>
+              </div>
+              <div className="task-detail-modal-status">
+                <TaskStatus status={detailTask.status} />
+                <button type="button" className="modal-close" aria-label="关闭任务详情" onClick={() => setDetailTaskId(null)}>×</button>
+              </div>
+            </header>
+
+            <div className="task-detail-modal-body">
+              <div className="task-detail-modal-main">
+                <section className="task-detail-route-card">
+                  <header>
+                    <div><span>ROUTE OVERVIEW</span><strong>任务地图与有序巡检路线</strong></div>
+                    <div className="task-detail-route-meta">
+                      <b>{detailRoutePoints.length} 个点位</b>
+                      {detailTask.status === '待执行' ? <em>支持拖动与缩放</em> : <em>路线执行视图</em>}
+                    </div>
+                  </header>
+                  <div className="task-detail-route-map">
+                    {detailTask.status === '待执行' ? (
+                      <InteractiveRouteMap
+                        taskId={detailTask.id}
+                        pointIds={detailRoutePoints.map((point) => point.id)}
+                        routePoints={detailRoutePoints}
+                        mapData={detailTaskMap}
+                      />
+                    ) : (
+                      <div className="task-detail-static-map">
+                        <PlanRoutePreview
+                          compact
+                          pointIds={detailRoutePoints.map((point) => point.id)}
+                          routePoints={detailRoutePoints}
+                          mapData={detailTaskMap}
+                          vehiclePose={detailTask.id === contextTask.id ? taskMonitorTelemetry?.pose : null}
+                          showRoute
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <footer className="task-detail-route-legend">
+                    <span><i className="route-line" />连线表示执行顺序</span>
+                    <span><i className="route-start" />绿色为首个点位</span>
+                    <span><i className="route-heading" />箭头表示到点朝向</span>
+                  </footer>
+                </section>
+
+                <div className="task-detail-evidence-grid">
+                  <section>
+                    <header><span>PROCESS</span><strong>执行时间线</strong></header>
+                    <div className="task-detail-timeline-list">
+                      {detailTask.timeline.map((item, index) => (
+                        <article className={`timeline-${item.state}`} key={`${detailTask.id}-${item.label}-${index}`}>
+                          <time>{item.time}</time><i>{item.type}</i><strong>{item.label}</strong>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                  <section>
+                    <header><span>RECOGNITION</span><strong>识别结果摘要</strong></header>
+                    <div className="task-detail-ai-list">
+                      {detailAiItems.slice(0, 4).map((item, index) => (
+                        <article key={`${item.title}-${index}`}>
+                          <div><strong>{item.title}</strong><TaskStatus status={item.status} /></div>
+                          <span>{item.value}</span>
+                          <small>{item.confidence} · {item.time}</small>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              </div>
+
+              <aside className="task-detail-modal-side">
+                <section className="task-detail-summary-card">
+                  <header><span>TASK SUMMARY</span><strong>任务信息</strong></header>
+                  <dl>
+                    <div><dt>任务编号</dt><dd>{detailTask.id}</dd></div>
+                    <div><dt>执行机器人</dt><dd>{detailTask.robot}</dd></div>
+                    <div><dt>任务区域</dt><dd>{detailTask.area}</dd></div>
+                    <div><dt>计划开始</dt><dd>{detailTask.start}</dd></div>
+                    <div><dt>路线点位</dt><dd>{detailTask.detail.currentPoint || 0} / {detailRoutePoints.length || detailTask.detail.pointTotal}</dd></div>
+                    <div><dt>预计完成</dt><dd>{detailTask.detail.eta || '--'}</dd></div>
+                    <div><dt>异常数量</dt><dd className={detailTask.detail.abnormalCount ? 'danger' : ''}>{detailTask.detail.abnormalCount || 0} 项</dd></div>
+                    <div><dt>任务优先级</dt><dd>{detailTask.priority || '普通'}</dd></div>
+                  </dl>
+                  <div className="task-detail-modal-progress">
+                    <div><span>任务进度</span><strong>{detailTask.progress || 0}%</strong></div>
+                    <i><b style={{ width: `${detailTask.progress || 0}%` }} /></i>
+                  </div>
+                </section>
+
+                <section className="task-detail-point-card">
+                  <header><span>ROUTE POINTS</span><strong>巡检点顺序</strong></header>
+                  <div className="task-detail-point-list">
+                    {detailRoutePoints.map((point, index) => {
+                      const reached = index < Number(detailTask.detail.currentPoint || 0)
+                      const current = detailTask.status === '执行中' && index === Number(detailTask.detail.currentPoint || 0)
+                      const direction = ARRIVAL_DIRECTIONS.find((item) => item.value === getPlanPointDirection(point))?.label || '东（0°）'
+                      return (
+                        <article className={reached ? 'reached' : current ? 'current' : 'pending'} key={point.id || index}>
+                          <b>{String(index + 1).padStart(2, '0')}</b>
+                          <div><strong>{point.targetName || point.name || `巡检点 ${index + 1}`}</strong><small>{point.id || '--'} · {direction}</small></div>
+                          <span>{reached ? '已到达' : current ? '当前点' : '待执行'}</span>
+                        </article>
+                      )
+                    })}
+                    {detailRoutePoints.length === 0 && <div className="business-empty">该任务没有保存路线点</div>}
+                  </div>
+                </section>
+              </aside>
+            </div>
+
+            <footer className="task-detail-modal-footer">
+              <span>{detailTask.status === '待执行' ? '启动前请确认车辆定位、路线点和现场安全。' : `当前状态：${detailTask.status}`}</span>
+              <div>
+                <TaskActionButtons
+                  variant="modal"
+                  task={detailTask}
+                  onAction={handleDetailTaskAction}
+                  onMonitor={(event, currentTask) => { event.stopPropagation(); setDetailTaskId(null); openLivePatrolMonitor(currentTask) }}
+                  onEdit={openEditTask}
+                  onDelete={handleDeleteTask}
+                />
+                <button type="button" className="task-detail-close-button" onClick={() => setDetailTaskId(null)}>关闭</button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      )}
+
       {isPlanModalOpen && (
         <div className="task-modal-backdrop" role="presentation">
           <section className="task-plan-modal" role="dialog" aria-modal="true" aria-labelledby="plan-modal-title">
             <div className="modal-heading">
               <div>
-                <span className="task-kicker">CREATE PATROL PLAN</span>
-                <h2 id="plan-modal-title">新建巡检计划</h2>
+                <span className="task-kicker">{editingTaskId ? 'EDIT PATROL TASK' : 'CREATE PATROL PLAN'}</span>
+                <h2 id="plan-modal-title">{editingTaskId ? '编辑待执行任务' : '新建巡检计划'}</h2>
               </div>
-              <button type="button" className="modal-close" aria-label="关闭新建计划" onClick={() => setIsPlanModalOpen(false)}>×</button>
+              <button type="button" className="modal-close" aria-label="关闭任务表单" onClick={closePlanModal}>×</button>
             </div>
 
             <form className="plan-form" onSubmit={handleCreatePlan}>
@@ -3204,10 +3619,10 @@ function ClusterControl() {
               </div>
 
               <div className="modal-actions">
-                <button type="button" onClick={() => setIsPlanModalOpen(false)}>取消</button>
+                <button type="button" onClick={closePlanModal}>取消</button>
                 {planStep > 1 && <button type="button" onClick={() => setPlanStep(planStep - 1)}>上一步</button>}
                 {planStep < 2 && <button type="button" className="primary" onClick={() => setPlanStep(planStep + 1)}>下一步</button>}
-                {planStep === 2 && <button type="submit" className="primary">创建任务</button>}
+                {planStep === 2 && <button type="submit" className="primary">{editingTaskId ? '保存修改' : '创建任务'}</button>}
               </div>
             </form>
           </section>

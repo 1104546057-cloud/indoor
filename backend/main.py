@@ -592,6 +592,25 @@ def _serialize_task(task: InspectionTask) -> dict:
     return payload
 
 
+def _build_task_route_points(payload: InspectionTaskCreate) -> list[InspectionTaskRoutePoint]:
+    source_points = payload.routePoints or [
+        TaskRoutePointRequest(id=point_id, pointId=point_id)
+        for point_id in payload.pointIds
+    ]
+    return [
+        InspectionTaskRoutePoint(
+            sequence=index + 1,
+            point_id=point.pointId or point.id,
+            point_name=point.pointName or point.name,
+            target_name=point.targetName,
+            x=point.x,
+            y=point.y,
+            point_payload=point.model_dump(mode='json'),
+        )
+        for index, point in enumerate(source_points)
+    ]
+
+
 @app.get("/api/tasks")
 def list_tasks(
     limit: int = 100,
@@ -635,27 +654,56 @@ def create_task(
         created_by=current_user.username,
     )
 
-    source_points = payload.routePoints or [
-        TaskRoutePointRequest(id=point_id, pointId=point_id)
-        for point_id in payload.pointIds
-    ]
-    task.route_points = [
-        InspectionTaskRoutePoint(
-            sequence=index + 1,
-            point_id=point.pointId or point.id,
-            point_name=point.pointName or point.name,
-            target_name=point.targetName,
-            x=point.x,
-            y=point.y,
-            point_payload=point.model_dump(mode='json'),
-        )
-        for index, point in enumerate(source_points)
-    ]
+    task.route_points = _build_task_route_points(payload)
 
     db.add(task)
     db.commit()
     db.refresh(task)
     return {'message': 'task created', 'task': _serialize_task(task)}
+
+
+@app.put("/api/tasks/{task_id}")
+def update_pending_task(
+    task_id: str,
+    payload: InspectionTaskCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    task = db.query(InspectionTask).filter(InspectionTask.task_id == task_id).first()
+    if task is None:
+        raise HTTPException(status_code=404, detail='task not found')
+    if payload.id != task_id:
+        raise HTTPException(status_code=422, detail='task id cannot be changed')
+
+    has_execution = (
+        db.query(InspectionRecord.id)
+        .filter(InspectionRecord.task_id == task_id)
+        .first()
+        is not None
+    )
+    if task.status not in {'pending', '待执行'} or task.progress > 0 or has_execution:
+        raise HTTPException(status_code=409, detail='only unexecuted tasks can be edited')
+
+    raw_payload = payload.model_dump(mode='json')
+    raw_payload['id'] = task_id
+    raw_payload['status'] = task.status
+    raw_payload['progress'] = task.progress
+    detail = payload.detail or {}
+
+    task.scene_id = payload.sceneId
+    task.name = payload.name
+    task.area = payload.area
+    task.robot = payload.robot
+    task.route_id = payload.routeId
+    task.start_time = payload.start
+    task.priority = payload.priority
+    task.point_total = int(detail.get('pointTotal') or len(payload.routePoints) or len(payload.pointIds))
+    task.task_payload = raw_payload
+    task.route_points = _build_task_route_points(payload)
+
+    db.commit()
+    db.refresh(task)
+    return {'message': 'task updated', 'task': _serialize_task(task)}
 
 
 @app.delete("/api/tasks/{task_id}")

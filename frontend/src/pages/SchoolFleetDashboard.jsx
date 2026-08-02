@@ -1,6 +1,7 @@
 /* eslint-disable react/prop-types */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import * as THREE from 'three'
 import useBusinessOverview from '../hooks/useBusinessOverview'
 import { labBuildingMap, labInspectionPointById } from '../data/labBuildingMap'
 import { hanlinRoomMap, inspectionPointById } from '../data/hanlinRoomMap'
@@ -8,7 +9,9 @@ import { buildPatrolMonitorUrl } from '../utils/patrolMonitor'
 import '../styles/SchoolFleetDashboard.css'
 
 const FLEET_SIZE = 22
+const MAX_ACTIVE_VISUALS = 6
 const ACTIVE_RECORD_STATES = new Set(['dispatching', 'running'])
+const REPLAY_RECORD_STATES = new Set(['completed', 'failed', 'cancelled', '已完成', '异常', '待审核'])
 const ABNORMAL_STATES = new Set(['异常', '告警'])
 const CAMERA_ROLES = [
   { role: 'high', label: '高位摄像头', code: 'CAM-H' },
@@ -29,6 +32,7 @@ function vehicleLabel(index) {
 function recordMatchesVehicle(record, vehicleId) {
   const candidates = [
     record.robotName,
+    record.robotCode,
     record.navigation?.vehicle_id,
     record.navigation?.vehicleId,
   ].filter(Boolean).map((value) => String(value).toLowerCase())
@@ -36,8 +40,8 @@ function recordMatchesVehicle(record, vehicleId) {
 }
 
 function statusMeta(vehicle) {
-  if (vehicle.abnormalCount > 0 && vehicle.record) return { key: 'alarm', label: '异常' }
-  if (vehicle.record && ACTIVE_RECORD_STATES.has(vehicle.record.status)) {
+  if (vehicle.abnormalCount > 0 && vehicle.activeRecord) return { key: 'alarm', label: '异常' }
+  if (vehicle.activeRecord && ACTIVE_RECORD_STATES.has(vehicle.activeRecord.status)) {
     return vehicle.online ? { key: 'running', label: '巡检中' } : { key: 'warning', label: '任务中断联' }
   }
   if (vehicle.online) return { key: 'idle', label: '在线空闲' }
@@ -158,9 +162,302 @@ function readTelemetryPose(telemetry, mapData) {
   return { ...modelPoint, yaw: Number(telemetry.yaw ?? telemetry.theta ?? quaternionYaw) || 0 }
 }
 
+function getReplayRoute(vehicle, mapData) {
+  const savedPoints = vehicle.replayRecord?.routePoints || []
+  const sourcePoints = savedPoints.length ? savedPoints : mapData.inspectionPoints || []
+  return sourcePoints.map((point) => toModelPoint(point, mapData)).filter(Boolean)
+}
+
+function ReplayStaticScene({ vehicle, mapData, routePoints }) {
+  const width = mapData.size.width
+  const height = mapData.size.height
+  const marker = routePoints[Math.min(routePoints.length - 1, Math.max(0, Math.floor(routePoints.length * 0.34)))]
+
+  return (
+    <div className="fleet-replay-static" aria-label={`${vehicle.label}静态路线回放预览`}>
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
+        <rect width={width} height={height} className="replay-static-floor" />
+        {(mapData.halls || []).map((hall) => (
+          <rect key={hall.id} x={hall.x} y={hall.y} width={hall.width} height={hall.depth} className="replay-static-hall" />
+        ))}
+        {(mapData.corridors || []).map((corridor) => (
+          <line key={corridor.id} x1={corridor.x1} y1={corridor.y1} x2={corridor.x2} y2={corridor.y2} strokeWidth={corridor.width} className="replay-static-corridor" />
+        ))}
+        {(mapData.walls || []).map((wall) => (
+          <line key={wall.id} x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} strokeWidth={Math.max(wall.thickness || 200, 260)} className="replay-static-wall" />
+        ))}
+        {routePoints.length > 1 ? <polyline points={routePoints.map((point) => `${point.x},${point.y}`).join(' ')} className="replay-static-route" /> : null}
+        {routePoints.map((point, index) => <circle key={`${point.id || index}`} cx={point.x} cy={point.y} r="850" className="replay-static-point" />)}
+        {marker ? (
+          <g className="replay-static-car" transform={`translate(${marker.x} ${marker.y})`}>
+            <circle r="1350" />
+            <path d="M -650 700 L 0 -1050 L 650 700 Z" />
+          </g>
+        ) : null}
+      </svg>
+      <span>STATIC PREVIEW</span>
+    </div>
+  )
+}
+
+function RouteReplay3D({ vehicle, mapData, routePoints, full = false }) {
+  const mountRef = useRef(null)
+
+  useEffect(() => {
+    const mount = mountRef.current
+    if (!mount || routePoints.length === 0) return undefined
+
+    const width = mapData.size.width
+    const height = mapData.size.height
+    const worldScale = 18 / Math.max(width, height)
+    const worldPoint = (x, y, elevation = 0) => new THREE.Vector3(
+      (Number(x) - width / 2) * worldScale,
+      elevation,
+      (Number(y) - height / 2) * worldScale,
+    )
+    const scene = new THREE.Scene()
+    scene.background = new THREE.Color(0x02121b)
+    scene.fog = new THREE.Fog(0x02121b, 18, 34)
+    const camera = new THREE.PerspectiveCamera(full ? 48 : 54, 1, 0.1, 80)
+    const renderer = new THREE.WebGLRenderer({ antialias: full, powerPreference: 'high-performance' })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, full ? 1.5 : 1))
+    renderer.outputColorSpace = THREE.SRGBColorSpace
+    mount.appendChild(renderer.domElement)
+
+    scene.add(new THREE.HemisphereLight(0xa8f4ff, 0x06131b, 1.25))
+    const keyLight = new THREE.DirectionalLight(0x7deaf1, 1.45)
+    keyLight.position.set(-7, 13, 9)
+    scene.add(keyLight)
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(width * worldScale * 1.08, height * worldScale * 1.08),
+      new THREE.MeshStandardMaterial({ color: 0x082b38, roughness: 0.88, metalness: 0.12 }),
+    )
+    floor.rotation.x = -Math.PI / 2
+    floor.position.y = -0.04
+    scene.add(floor)
+
+    const grid = new THREE.GridHelper(22, 22, 0x1f7484, 0x124755)
+    grid.position.y = 0.01
+    scene.add(grid)
+
+    const addSegment = (item, thickness, wallHeight, color, opacity = 1) => {
+      const start = worldPoint(item.x1, item.y1)
+      const end = worldPoint(item.x2, item.y2)
+      const length = start.distanceTo(end)
+      if (!Number.isFinite(length) || length <= 0) return
+      const material = new THREE.MeshStandardMaterial({ color, transparent: opacity < 1, opacity, roughness: 0.72 })
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(length, wallHeight, Math.max(thickness * worldScale, 0.045)), material)
+      mesh.position.copy(start).add(end).multiplyScalar(0.5)
+      mesh.position.y = wallHeight / 2
+      mesh.rotation.y = -Math.atan2(end.z - start.z, end.x - start.x)
+      scene.add(mesh)
+    }
+
+    ;(mapData.corridors || []).forEach((corridor) => addSegment(corridor, corridor.width, 0.06, 0x176174, 0.92))
+    ;(mapData.walls || []).forEach((wall) => addSegment(wall, wall.thickness || 180, 0.72, 0x64c0ce, 0.68))
+
+    const addBlock = (item, blockHeight, color) => {
+      const blockWidth = Math.max(Number(item.width || 800) * worldScale, 0.08)
+      const blockDepth = Math.max(Number(item.depth || item.height || 800) * worldScale, 0.08)
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(blockWidth, blockHeight, blockDepth),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.68, metalness: 0.18 }),
+      )
+      const center = worldPoint(Number(item.x) + Number(item.width || 800) / 2, Number(item.y) + Number(item.depth || item.height || 800) / 2)
+      mesh.position.set(center.x, blockHeight / 2, center.z)
+      scene.add(mesh)
+    }
+    ;(mapData.halls || []).forEach((hall) => addBlock(hall, 0.12, 0x184b59))
+    ;(mapData.cabinets || []).forEach((cabinet) => addBlock(cabinet, 0.76, 0x426c75))
+    ;(mapData.columns || []).forEach((column) => addBlock(column, 0.82, 0x758e92))
+
+    const worldRoute = routePoints.map((point) => worldPoint(point.x, point.y, 0.1))
+    const routeGeometry = new THREE.BufferGeometry().setFromPoints(worldRoute)
+    const routeLine = new THREE.Line(routeGeometry, new THREE.LineBasicMaterial({ color: 0x48f0c7, transparent: true, opacity: 0.9 }))
+    scene.add(routeLine)
+    worldRoute.forEach((point, index) => {
+      const marker = new THREE.Mesh(
+        new THREE.CylinderGeometry(index === 0 ? 0.16 : 0.11, index === 0 ? 0.16 : 0.11, 0.08, 12),
+        new THREE.MeshBasicMaterial({ color: index === 0 ? 0x5ff3bc : 0x5ce8ef }),
+      )
+      marker.position.copy(point)
+      scene.add(marker)
+    })
+
+    const car = new THREE.Group()
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.62, 0.28, 0.9),
+      new THREE.MeshStandardMaterial({ color: 0x73ecf4, roughness: 0.32, metalness: 0.42 }),
+    )
+    body.position.y = 0.22
+    car.add(body)
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.42, 4), new THREE.MeshBasicMaterial({ color: 0xffc45c }))
+    nose.rotation.x = Math.PI / 2
+    nose.position.set(0, 0.24, -0.62)
+    car.add(nose)
+    const glow = new THREE.Mesh(new THREE.RingGeometry(0.48, 0.62, 24), new THREE.MeshBasicMaterial({ color: 0x37e9c2, transparent: true, opacity: 0.5, side: THREE.DoubleSide }))
+    glow.rotation.x = -Math.PI / 2
+    glow.position.y = 0.03
+    car.add(glow)
+    scene.add(car)
+
+    const segmentLengths = worldRoute.slice(0, -1).map((point, index) => point.distanceTo(worldRoute[index + 1]))
+    const routeLength = segmentLengths.reduce((sum, value) => sum + value, 0) || 1
+    const sampleRoute = (progress) => {
+      let distance = progress * routeLength
+      for (let index = 0; index < segmentLengths.length; index += 1) {
+        if (distance <= segmentLengths[index]) {
+          const ratio = segmentLengths[index] ? distance / segmentLengths[index] : 0
+          return {
+            position: worldRoute[index].clone().lerp(worldRoute[index + 1], ratio),
+            next: worldRoute[index + 1],
+          }
+        }
+        distance -= segmentLengths[index]
+      }
+      return { position: worldRoute.at(-1).clone(), next: worldRoute.at(-1) }
+    }
+
+    let frameId = 0
+    let lastFrameAt = 0
+    const startedAt = performance.now() - vehicle.index * 970
+    const frameInterval = 1000 / (full ? 30 : 12)
+    const animate = (timestamp) => {
+      frameId = window.requestAnimationFrame(animate)
+      if (document.hidden || timestamp - lastFrameAt < frameInterval) return
+      lastFrameAt = timestamp
+      const progress = ((timestamp - startedAt) / (full ? 26000 : 32000)) % 1
+      const sampled = sampleRoute(progress)
+      car.position.copy(sampled.position)
+      const dx = sampled.next.x - sampled.position.x
+      const dz = sampled.next.z - sampled.position.z
+      if (Math.abs(dx) + Math.abs(dz) > 0.001) car.rotation.y = Math.atan2(-dx, -dz)
+      glow.material.opacity = 0.36 + Math.sin(timestamp * 0.006) * 0.16
+
+      const cameraOffset = full ? new THREE.Vector3(-4.8, 4.4, 6.4) : new THREE.Vector3(-3.5, 3.2, 4.8)
+      const targetPosition = sampled.position.clone().add(cameraOffset)
+      camera.position.lerp(targetPosition, full ? 0.075 : 0.12)
+      camera.lookAt(sampled.position.x, 0.18, sampled.position.z)
+      renderer.render(scene, camera)
+    }
+
+    const resize = () => {
+      const rect = mount.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+      renderer.setSize(rect.width, rect.height, false)
+      camera.aspect = rect.width / rect.height
+      camera.updateProjectionMatrix()
+    }
+    const observer = new ResizeObserver(resize)
+    observer.observe(mount)
+    resize()
+    const first = sampleRoute(0)
+    car.position.copy(first.position)
+    camera.position.copy(first.position).add(full ? new THREE.Vector3(-4.8, 4.4, 6.4) : new THREE.Vector3(-3.5, 3.2, 4.8))
+    frameId = window.requestAnimationFrame(animate)
+
+    return () => {
+      observer.disconnect()
+      window.cancelAnimationFrame(frameId)
+      scene.traverse((object) => {
+        object.geometry?.dispose?.()
+        if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose())
+        else object.material?.dispose?.()
+      })
+      renderer.dispose()
+      if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
+    }
+  }, [full, mapData, routePoints, vehicle.index])
+
+  return <div className={`fleet-replay-3d${full ? ' is-full' : ''}`} ref={mountRef} aria-label={`${vehicle.label}路线模拟3D跟随视角`} />
+}
+
+function ReplayFeed({ vehicle, animated, full = false }) {
+  const mapData = getVehicleMap(vehicle)
+  const routePoints = useMemo(() => getReplayRoute(vehicle, mapData), [mapData, vehicle])
+  const isDemo = !vehicle.replayRecord
+  const badge = animated ? (isDemo ? 'DEMO' : 'REPLAY') : 'STATIC'
+  const recordTime = vehicle.replayRecord?.finishedAt || vehicle.replayRecord?.startedAt
+
+  return (
+    <article className={`fleet-camera fleet-replay-monitor${full ? ' is-full-replay' : ' is-compact'} ${animated ? 'is-animated' : 'is-static'}`}>
+      <header>
+        <div><i /><strong>{full ? '完整3D跟随视角' : `${vehicle.label}路线回放`}</strong><span>{isDemo ? 'LAB-1 DEMO' : vehicle.replayRecord.recordCode || 'LAST TASK'}</span></div>
+        <em>{badge}</em>
+      </header>
+      <div className="fleet-camera-viewport">
+        {animated ? <RouteReplay3D vehicle={vehicle} mapData={mapData} routePoints={routePoints} full={full} /> : <ReplayStaticScene vehicle={vehicle} mapData={mapData} routePoints={routePoints} />}
+        <span className="fleet-replay-mode-label">{isDemo ? '实验楼一模拟路线' : '上次完成任务 · 路线模拟'}</span>
+        <span className="camera-corner top-left" />
+        <span className="camera-corner top-right" />
+        <span className="camera-corner bottom-left" />
+        <span className="camera-corner bottom-right" />
+      </div>
+      <footer>
+        <span>{vehicle.roomName}</span>
+        <b>{isDemo ? '无历史记录 / 演示路线' : vehicle.replayRecord.taskName}</b>
+        <em>{recordTime ? formatTime(recordTime) : 'DEMO'}</em>
+      </footer>
+    </article>
+  )
+}
+
+function FleetPrimaryTile({ vehicle, animated, onVisibilityChange, onSelect }) {
+  const tileRef = useRef(null)
+  const [isVisible, setIsVisible] = useState(false)
+  const taskRunning = Boolean(vehicle.online && vehicle.activeRecord && ACTIVE_RECORD_STATES.has(vehicle.activeRecord.status))
+
+  useEffect(() => {
+    const element = tileRef.current
+    if (!element) return undefined
+    const observer = new IntersectionObserver(([entry]) => {
+      const nextVisible = entry.isIntersecting && entry.intersectionRatio > 0.08
+      setIsVisible(nextVisible)
+      onVisibilityChange(vehicle.id, nextVisible)
+    }, { threshold: [0, 0.08, 0.4] })
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      onVisibilityChange(vehicle.id, false)
+    }
+  }, [onVisibilityChange, vehicle.id])
+
+  return (
+    <article
+      ref={tileRef}
+      className={`fleet-primary-tile status-${vehicle.status.key}`}
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(vehicle.id)}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        onSelect(vehicle.id)
+      }}
+    >
+      {taskRunning ? (
+        <CameraFeed
+          vehicle={vehicle}
+          role="movement"
+          title={`${vehicle.label}主摄像头`}
+          code={`CAR-${String(vehicle.index).padStart(2, '0')}`}
+          enabled={isVisible}
+          configured={vehicle.cameraRoles.includes('movement')}
+          compact
+        />
+      ) : <ReplayFeed vehicle={vehicle} animated={animated && isVisible} />}
+      <span className="fleet-tile-status"><i />{taskRunning ? '实时巡检' : vehicle.status.label}</span>
+    </article>
+  )
+}
+
 function FleetRouteMap({ vehicle, telemetry, mapData }) {
   const navigation = telemetry?.navigation || vehicle.record?.navigation || {}
-  const routePoints = (vehicle.record?.routePoints || []).map((point) => toModelPoint(point, mapData)).filter(Boolean)
+  const savedRoutePoints = vehicle.record?.routePoints || []
+  const routePoints = savedRoutePoints.length
+    ? savedRoutePoints.map((point) => toModelPoint(point, mapData)).filter(Boolean)
+    : vehicle.activeRecord ? [] : getReplayRoute(vehicle, mapData)
   const points = routePoints.length ? routePoints : []
   const reachedCount = Number(navigation.reached_count ?? vehicle.record?.currentSequence ?? 0)
   const currentPose = readTelemetryPose(telemetry, mapData)
@@ -275,6 +572,7 @@ function SchoolFleetDashboard() {
   const [sidebarMode, setSidebarMode] = useState('vehicles')
   const [roomFilter, setRoomFilter] = useState('')
   const [telemetry, setTelemetry] = useState(null)
+  const [visibleTileIds, setVisibleTileIds] = useState(() => new Set())
 
   const fleet = useMemo(() => {
     const registryByNumber = new Map()
@@ -293,7 +591,10 @@ function SchoolFleetDashboard() {
       const registered = registryByNumber.get(index)
       const robot = robotByNumber.get(index)
       const id = registered?.id || robot?.robotCode || `nano${index}`
-      const record = business.records.find((item) => recordMatchesVehicle(item, id)) || null
+      const matchingRecords = business.records.filter((item) => recordMatchesVehicle(item, id))
+      const activeRecord = matchingRecords.find((item) => ACTIVE_RECORD_STATES.has(item.status)) || null
+      const replayRecord = matchingRecords.find((item) => REPLAY_RECORD_STATES.has(item.status)) || null
+      const record = activeRecord || replayRecord
       const results = record ? business.results.filter((result) => result.taskId === record.taskId) : []
       const abnormalCount = results.filter((result) => ABNORMAL_STATES.has(result.status)).length
       const online = Boolean(registered?.online)
@@ -310,10 +611,12 @@ function SchoolFleetDashboard() {
         voltage: registered?.voltage ?? robot?.voltage,
         battery: robot?.battery,
         record,
+        activeRecord,
+        replayRecord,
         results,
         abnormalCount,
-        roomName: record?.taskArea || '未分配电房',
-        taskName: record?.taskName || (online ? '当前无执行任务' : '等待车辆上线'),
+        roomName: record?.taskArea || '实验楼一层 / 演示区域',
+        taskName: activeRecord?.taskName || replayRecord?.taskName || '实验楼一演示路线',
         progress: Number(record?.progress || 0),
       }
       return { ...vehicle, status: statusMeta(vehicle) }
@@ -321,14 +624,45 @@ function SchoolFleetDashboard() {
   }, [business.records, business.results, business.robots, registeredVehicles])
 
   const selectedVehicle = fleet.find((vehicle) => vehicle.id === selectedVehicleId) || null
+  const selectedActiveTaskId = selectedVehicle?.activeRecord?.taskId || null
   const runningCount = fleet.filter((vehicle) => vehicle.status.key === 'running').length
   const onlineCount = fleet.filter((vehicle) => vehicle.online).length
   const alarmCount = fleet.reduce((sum, vehicle) => sum + vehicle.abnormalCount, 0)
-  const visibleVehicles = fleet.filter((vehicle) => vehicle.online && (!roomFilter || vehicle.roomName.includes(roomFilter)))
+  const visibleVehicles = useMemo(() => {
+    const order = { running: 0, alarm: 1, warning: 2, idle: 3, offline: 4 }
+    return fleet
+      .filter((vehicle) => !roomFilter || vehicle.roomName.includes(roomFilter))
+      .sort((left, right) => order[left.status.key] - order[right.status.key] || left.index - right.index)
+  }, [fleet, roomFilter])
   const gridColumns = smartGridColumns(visibleVehicles.length)
+  const animatedReplayIds = useMemo(() => {
+    const visibleLiveCount = visibleVehicles.filter((vehicle) => (
+      visibleTileIds.has(vehicle.id)
+      && vehicle.online
+      && vehicle.activeRecord
+      && ACTIVE_RECORD_STATES.has(vehicle.activeRecord.status)
+    )).length
+    const availableReplaySlots = Math.max(0, MAX_ACTIVE_VISUALS - visibleLiveCount)
+    const candidates = visibleVehicles.filter((vehicle) => (
+      visibleTileIds.has(vehicle.id)
+      && !(vehicle.online && vehicle.activeRecord && ACTIVE_RECORD_STATES.has(vehicle.activeRecord.status))
+    )).sort((left, right) => Number(right.online) - Number(left.online) || Number(Boolean(right.replayRecord)) - Number(Boolean(left.replayRecord)) || left.index - right.index)
+    return new Set(candidates.slice(0, availableReplaySlots).map((vehicle) => vehicle.id))
+  }, [visibleTileIds, visibleVehicles])
+
+  const handleTileVisibility = useCallback((vehicleId, isVisible) => {
+    setVisibleTileIds((current) => {
+      const hasVehicle = current.has(vehicleId)
+      if (hasVehicle === isVisible) return current
+      const next = new Set(current)
+      if (isVisible) next.add(vehicleId)
+      else next.delete(vehicleId)
+      return next
+    })
+  }, [])
 
   useEffect(() => {
-    if (!selectedVehicle?.registered) {
+    if (!selectedVehicle?.registered || !selectedActiveTaskId) {
       setTelemetry(null)
       return undefined
     }
@@ -349,12 +683,13 @@ function SchoolFleetDashboard() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [selectedVehicle?.id, selectedVehicle?.registered])
+  }, [selectedActiveTaskId, selectedVehicle?.id, selectedVehicle?.registered])
 
-  const taskRunning = Boolean(selectedVehicle?.online && selectedVehicle?.record && ACTIVE_RECORD_STATES.has(selectedVehicle.record.status))
+  const taskRunning = Boolean(selectedVehicle?.online && selectedVehicle?.activeRecord && ACTIVE_RECORD_STATES.has(selectedVehicle.activeRecord.status))
   const selectedMap = selectedVehicle ? getVehicleMap(selectedVehicle) : labBuildingMap
   const navigation = telemetry?.navigation || selectedVehicle?.record?.navigation || {}
-  const pointTotal = Number(navigation.route_total ?? selectedVehicle?.record?.pointTotal ?? selectedVehicle?.record?.routePoints?.length ?? 0)
+  const replayPointTotal = selectedVehicle && !selectedVehicle.activeRecord ? getReplayRoute(selectedVehicle, selectedMap).length : 0
+  const pointTotal = Number(navigation.route_total ?? selectedVehicle?.record?.pointTotal ?? selectedVehicle?.record?.routePoints?.length ?? replayPointTotal)
   const reachedCount = Number(navigation.reached_count ?? selectedVehicle?.record?.currentSequence ?? 0)
 
   const selectVehicle = (vehicleId) => {
@@ -368,7 +703,7 @@ function SchoolFleetDashboard() {
         <div className="fleet-title">
           <span>SCHOOL-LEVEL VEHICLE MONITORING</span>
           <h1>{selectedVehicle ? `${selectedVehicle.label}巡检详情` : '学校级巡检车辆监控中心'}</h1>
-          <p>{selectedVehicle ? `${selectedVehicle.roomName} · ${selectedVehicle.taskName}` : '固定管理22台巡检车，按在线数量智能排列主摄像头画面'}</p>
+          <p>{selectedVehicle ? `${selectedVehicle.roomName} · ${selectedVehicle.taskName}` : '实时车辆优先显示主摄像头，其余车辆回放最近路线或实验楼一演示路线'}</p>
         </div>
         <div className="fleet-summary">
           <span><small>车辆总数</small><strong>22</strong><em>台</em></span>
@@ -384,39 +719,23 @@ function SchoolFleetDashboard() {
           {!selectedVehicle ? (
             <section className="fleet-overview-panel">
               <div className="fleet-section-heading">
-                <div><span>PRIMARY CAMERA WALL</span><h2>{roomFilter || '全部在线车辆'}</h2></div>
-                <div><b>{visibleVehicles.length}</b> 路主摄像头 · {gridColumns} 列智能布局</div>
+                <div><span>SMART MONITOR WALL</span><h2>{roomFilter || '全部车辆监控'}</h2></div>
+                <div><b>{visibleVehicles.length}</b> 个窗口 · 最多 {MAX_ACTIVE_VISUALS} 路动态画面 · {gridColumns} 列布局</div>
               </div>
               {loading ? <div className="fleet-empty-state"><strong>正在同步车辆监控状态</strong><span>请稍候</span></div> : null}
               {!loading && error ? <div className="fleet-empty-state is-error"><strong>监控数据读取失败</strong><span>{error}</span></div> : null}
               {!loading && !error && visibleVehicles.length === 0 ? (
-                <div className="fleet-empty-state"><span className="empty-radar" /><strong>{roomFilter ? `${roomFilter}暂无在线车辆` : '当前没有已启动车辆'}</strong><span>右侧仍可查看固定22台车辆及其离线状态</span></div>
+                <div className="fleet-empty-state"><span className="empty-radar" /><strong>{roomFilter ? `${roomFilter}暂无关联车辆` : '暂无车辆数据'}</strong><span>可在右侧切换全部车辆或其他电房</span></div>
               ) : null}
               <div className="fleet-camera-wall" style={{ '--fleet-columns': gridColumns }}>
                 {visibleVehicles.map((vehicle) => (
-                  <article
-                    className={`fleet-primary-tile status-${vehicle.status.key}`}
+                  <FleetPrimaryTile
                     key={vehicle.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => selectVehicle(vehicle.id)}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return
-                      event.preventDefault()
-                      selectVehicle(vehicle.id)
-                    }}
-                  >
-                    <CameraFeed
-                      vehicle={vehicle}
-                      role="movement"
-                      title={`${vehicle.label}主摄像头`}
-                      code={`CAR-${String(vehicle.index).padStart(2, '0')}`}
-                      enabled={vehicle.online}
-                      configured={vehicle.cameraRoles.includes('movement')}
-                      compact
-                    />
-                    <span className="fleet-tile-status"><i />{vehicle.status.label}</span>
-                  </article>
+                    vehicle={vehicle}
+                    animated={animatedReplayIds.has(vehicle.id)}
+                    onVisibilityChange={handleTileVisibility}
+                    onSelect={selectVehicle}
+                  />
                 ))}
               </div>
             </section>
@@ -437,23 +756,29 @@ function SchoolFleetDashboard() {
                 ) : null}
               </div>
 
-              <div className="fleet-four-camera-grid">
-                {CAMERA_ROLES.map((camera) => (
-                  <CameraFeed
-                    key={camera.role}
-                    vehicle={selectedVehicle}
-                    role={camera.role}
-                    title={camera.label}
-                    code={camera.code}
-                    enabled={taskRunning}
-                    configured={selectedVehicle.cameraRoles.includes(camera.role)}
-                  />
-                ))}
-              </div>
+              {taskRunning ? (
+                <div className="fleet-four-camera-grid">
+                  {CAMERA_ROLES.map((camera) => (
+                    <CameraFeed
+                      key={camera.role}
+                      vehicle={selectedVehicle}
+                      role={camera.role}
+                      title={camera.label}
+                      code={camera.code}
+                      enabled
+                      configured={selectedVehicle.cameraRoles.includes(camera.role)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="fleet-detail-replay">
+                  <ReplayFeed vehicle={selectedVehicle} animated full />
+                </div>
+              )}
 
               <div className="fleet-detail-bottom">
                 <article className="fleet-route-panel">
-                  <header><div><span>REAL-TIME MAP</span><h2>实时地图、车辆与路线</h2></div><b>{selectedMap.name}</b></header>
+                  <header><div><span>{taskRunning ? 'REAL-TIME MAP' : 'REPLAY ROUTE'}</span><h2>{taskRunning ? '实时地图、车辆与路线' : '历史任务路线与巡检点'}</h2></div><b>{selectedMap.name}</b></header>
                   <FleetRouteMap vehicle={selectedVehicle} telemetry={telemetry} mapData={selectedMap} />
                 </article>
                 <article className="fleet-task-panel">
@@ -468,11 +793,11 @@ function SchoolFleetDashboard() {
                     <div><dt>所属电房</dt><dd>{selectedVehicle.roomName}</dd></div>
                     <div><dt>开始时间</dt><dd>{formatTime(selectedVehicle.record?.startedAt)}</dd></div>
                     <div><dt>巡检点位</dt><dd>{reachedCount} / {pointTotal}</dd></div>
-                    <div><dt>导航状态</dt><dd>{navigation.state || selectedVehicle.record?.status || '--'}</dd></div>
+                    <div><dt>导航状态</dt><dd>{navigation.state || selectedVehicle.record?.status || '路线模拟回放'}</dd></div>
                   </dl>
                   <div className="fleet-result-list">
                     <div className="fleet-result-list-head"><span>最近识别结果</span><b>{selectedVehicle.results.length} 项</b></div>
-                    {!selectedVehicle.results.length ? <div className="fleet-result-empty">等待车辆到点并上传识别结果</div> : null}
+                    {!selectedVehicle.results.length ? <div className="fleet-result-empty">{taskRunning ? '等待车辆到点并上传识别结果' : '演示回放不生成实时识别结果'}</div> : null}
                     {selectedVehicle.results.slice(0, 6).map((result) => (
                       <div className={`fleet-result-item ${ABNORMAL_STATES.has(result.status) ? 'is-abnormal' : ''}`} key={result.id}>
                         <span>{result.targetName || result.pointId || '巡检目标'}<small>{result.recognitionType || 'AI识别'}</small></span>
