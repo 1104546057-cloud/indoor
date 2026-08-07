@@ -81,7 +81,7 @@ function DeviceControl() {
   const [isLidarDemo, setIsLidarDemo] = useState(false)
   const [activeDirections, setActiveDirections] = useState([])
   const [vehicles, setVehicles] = useState(fallbackVehicles)
-  const [selectedVehicleId, setSelectedVehicleId] = useState('')
+  const [selectedVehicleId, setSelectedVehicleId] = useState(() => location.state?.vehicleId || '')
   const [vehicleMenuOpen, setVehicleMenuOpen] = useState(false)
   const [controlMode, setControlMode] = useState('manual')
   const [isConnecting, setIsConnecting] = useState(false)
@@ -165,7 +165,9 @@ function DeviceControl() {
       const list = data.vehicles?.length ? data.vehicles : fallbackVehicles
       setVehicles(list)
       const defaultId = data.default_vehicle_id || (list.length > 0 ? list[0].id : '')
-      setSelectedVehicleId((current) => current || defaultId)
+      setSelectedVehicleId((current) => (
+        current && list.some((vehicle) => vehicle.id === current) ? current : defaultId
+      ))
     } catch {
       setVehicles(fallbackVehicles)
     }

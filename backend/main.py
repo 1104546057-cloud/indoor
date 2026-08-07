@@ -10,7 +10,8 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import Body, Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -129,6 +130,7 @@ password_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'dwc-default-secret-key')
 JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES', '1440'))
+COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'false').lower() in {'1', 'true', 'yes'}
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -353,7 +355,10 @@ app.include_router(create_business_router(get_current_user))
 
 @app.get("/")
 async def root():
-    # 根接口用于快速确认后端服务已经启动。
+    frontend_index = Path(__file__).resolve().parents[1] / 'frontend' / 'dist' / 'index.html'
+    if frontend_index.is_file():
+        return FileResponse(frontend_index)
+    # 未构建前端时，根接口仍可用于快速确认后端服务已经启动。
     return {"message": "Indoor inspection robot management platform API"}
 
 
@@ -394,7 +399,7 @@ async def login(request: LoginRequest, response: Response, db: Session = Depends
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite='lax',
-        secure=False,  # 仅限 HTTP 开发环境；生产环境使用 HTTPS 时应改为 True。
+        secure=COOKIE_SECURE,
     )
 
     db.add(SystemLog(
@@ -1215,3 +1220,29 @@ def vehicle_lidar(
     require_permission(current_user, 'patrol_monitor', 'view')
     # 雷达由 Nano 上的小桥接服务把 ROS /lidar/scan 转成 WebSocket JSON。
     return get_lidar_info(vehicle_id)
+
+
+# 生产部署时直接托管 Vite 构建产物。API 路由均在此之前注册，因此不会被 SPA 回退覆盖。
+FRONTEND_DIST = Path(__file__).resolve().parents[1] / 'frontend' / 'dist'
+FRONTEND_ASSETS = FRONTEND_DIST / 'assets'
+
+if FRONTEND_ASSETS.is_dir():
+    app.mount('/assets', StaticFiles(directory=FRONTEND_ASSETS), name='frontend-assets')
+
+
+@app.get('/{frontend_path:path}', include_in_schema=False)
+def frontend_application(frontend_path: str):
+    if frontend_path.startswith('api/'):
+        raise HTTPException(status_code=404, detail='API endpoint not found')
+    if not FRONTEND_DIST.is_dir():
+        raise HTTPException(status_code=404, detail='Frontend build not found')
+
+    requested = (FRONTEND_DIST / frontend_path).resolve()
+    try:
+        requested.relative_to(FRONTEND_DIST.resolve())
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail='File not found') from error
+
+    if frontend_path and requested.is_file():
+        return FileResponse(requested)
+    return FileResponse(FRONTEND_DIST / 'index.html')

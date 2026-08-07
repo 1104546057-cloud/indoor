@@ -318,12 +318,12 @@
   font-weight: 900;
 }
 
-button.device-row {
+.device-table-body > .device-row {
   cursor: pointer;
 }
 
-button.device-row:hover,
-button.device-row.selected {
+.device-table-body > .device-row:hover,
+.device-table-body > .device-row.selected {
   background: linear-gradient(90deg, rgba(17, 129, 171, 0.28), rgba(5, 30, 48, 0.56));
   box-shadow: inset 3px 0 0 rgba(81, 209, 240, 0.8);
 }
@@ -347,6 +347,37 @@ button.device-row.selected {
   color: #43d2f1;
   font-size: 12px;
   font-weight: 900;
+}
+
+.device-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.device-row-actions button {
+  min-width: 42px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(67, 210, 241, 0.34);
+  color: #43d2f1;
+  background: rgba(8, 59, 85, 0.36);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.device-row-actions button:hover,
+.device-row-actions button:focus-visible {
+  border-color: rgba(80, 238, 199, 0.72);
+  color: #b6fff0;
+  background: rgba(18, 108, 96, 0.42);
+  outline: 0;
+}
+
+.device-row-actions button.remote {
+  color: #62f0c2;
+  border-color: rgba(98, 240, 194, 0.42);
 }
 
 .dm-status {
