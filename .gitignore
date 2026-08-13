@@ -31,6 +31,7 @@ tmp/
 backend/*.log
 backend/*.err.log
 backend/uploads/
+backend/map_assets/
 hellcondabinconda-hook.ps1) ; (conda activate Env11)
 
 # Environment
