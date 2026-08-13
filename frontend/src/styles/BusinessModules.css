@@ -119,12 +119,14 @@
 /* 设备主数据增强管理器 */
 .business-resource-manager { min-height: 0; display: grid; grid-template-rows: 48px minmax(0, 1fr); gap: 12px; }
 .business-resource-toolbar { min-width: 0; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.35fr) 150px auto; align-items: center; gap: 10px; padding: 7px 12px; border: 1px solid rgba(158, 223, 234, .22); background: rgba(7, 45, 61, .78); }
-.business-resource-toolbar > div { display: flex; align-items: baseline; gap: 10px; }
+.business-resource-heading { display: flex; align-items: baseline; gap: 10px; }
+.business-toolbar-actions { display: flex; align-items: center; gap: 8px; }
 .business-resource-toolbar strong { font-size: 15px; }
 .business-resource-toolbar span { color: #80b7c1; font-size: 12px; }
 .business-resource-toolbar input,
 .business-resource-toolbar select,
 .business-resource-toolbar button { min-width: 0; min-height: 34px; padding: 0 11px; color: #dff9fd; border: 1px solid rgba(158, 223, 234, .22); background: rgba(5, 31, 45, .82); font-size: 12px; }
+.business-resource-toolbar .map-entry { color: #58ead0; border-color: rgba(66, 226, 208, .48); }
 .business-resource-grid.enhanced { grid-template-columns: minmax(400px, .9fr) minmax(540px, 1.1fr); }
 .business-resource-list { display: grid; grid-template-rows: minmax(0, 1fr) 38px; }
 .business-master-list { align-content: start; max-height: none; }
@@ -178,6 +180,6 @@
 .business-form-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 @media (max-width: 1280px) {
-  .business-resource-toolbar { grid-template-columns: 1fr 1fr 130px; }
+  .business-resource-toolbar { grid-template-columns: minmax(150px, .8fr) minmax(190px, 1fr) 120px auto; }
   .business-resource-grid.enhanced { grid-template-columns: 1fr; overflow: auto; }
 }

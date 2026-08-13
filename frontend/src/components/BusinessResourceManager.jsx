@@ -173,6 +173,16 @@ export default function BusinessResourceManager({ view, business, onSaved }) {
   const select = (resource) => { setSelectedId(resource.id); setMode('view'); setForm(formFromResource(view, resource)); setMessage('') }
   const beginCreate = () => { setSelectedId(null); setMode('create'); setForm(emptyForm(view)); setMessage('') }
   const beginEdit = () => { if (selected) { setMode('edit'); setForm(formFromResource(view, selected)); setMessage('') } }
+  const openMapManagement = () => {
+    if (selected) {
+      navigate(`/devices/rooms/${selected.id}/maps`)
+      return
+    }
+    setSelectedId(null)
+    setMode('create')
+    setForm(emptyForm(view))
+    setMessage('请先新增电房档案，保存后即可进入地图管理。')
+  }
   const submit = async (event) => {
     event.preventDefault()
     setSaving(true)
@@ -206,7 +216,12 @@ export default function BusinessResourceManager({ view, business, onSaved }) {
 
   return (
     <div className="business-resource-manager">
-      <div className="business-resource-toolbar"><div><strong>{resourceLabels[view]}档案</strong><span>共 {resources.length} 项</span></div><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1) }} placeholder="搜索编码、名称或所属资源" /><select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1) }}><option value="all">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select><button type="button" className="business-primary" onClick={beginCreate}>＋ 新增{resourceLabels[view]}</button></div>
+      <div className="business-resource-toolbar">
+        <div className="business-resource-heading"><strong>{resourceLabels[view]}档案</strong><span>共 {resources.length} 项</span></div>
+        <input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1) }} placeholder="搜索编码、名称或所属资源" />
+        <select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1) }}><option value="all">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select>
+        <div className="business-toolbar-actions">{view === 'room' ? <button type="button" className="map-entry" onClick={openMapManagement}>地图管理</button> : null}<button type="button" className="business-primary" onClick={beginCreate}>＋ 新增{resourceLabels[view]}</button></div>
+      </div>
       <div className="business-resource-grid enhanced">
         <section className="business-resource-list"><div className="business-master-list">{pageRows.length ? pageRows.map((row) => <button type="button" className={`business-master-row${selected?.id === row.resource.id ? ' selected' : ''}`} key={row.resource.id} onClick={() => select(row.resource)}><span>{row.code}</span><div><strong>{row.name}</strong><small>{row.meta}</small><p>{row.detail}</p></div><em className={row.active ? 'active' : 'inactive'}>{row.active ? '启用' : '停用'}</em></button>) : <div className="business-empty">没有符合条件的数据</div>}</div><div className="business-pagination"><span>第 {Math.min(page, pageCount)} / {pageCount} 页</span><button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>上一页</button><button type="button" disabled={page >= pageCount} onClick={() => setPage((value) => value + 1)}>下一页</button></div></section>
         <form className="business-resource-form enhanced" onSubmit={submit}><div className="business-panel-title"><div><span>{mode === 'view' ? 'RESOURCE DETAIL' : 'MASTER DATA EDITOR'}</span><h2>{mode === 'create' ? `新增${resourceLabels[view]}` : mode === 'edit' ? `编辑${resourceLabels[view]}` : selected ? selected.name || selected.ruleName : `请选择${resourceLabels[view]}`}</h2></div>{selected && mode === 'view' ? <div className="resource-actions">{view === 'room' ? <button type="button" className="map-entry" onClick={() => navigate(`/devices/rooms/${selected.id}/maps`)}>地图管理</button> : null}<button type="button" onClick={beginEdit}>编辑</button><button type="button" onClick={() => remove(false)}>停用</button><button type="button" className="danger" onClick={() => remove(true)}>删除</button></div> : null}</div>{mode === 'view' ? selected ? <div className="resource-readonly"><fieldset disabled><ResourceFields view={view} form={form} setForm={() => {}} business={business} /></fieldset>{selected.active === false ? <b className="resource-disabled-notice">该资源当前已停用，可通过“编辑”重新启用</b> : null}</div> : <div className="business-empty">请选择左侧资源，或新建一项</div> : <><ResourceFields view={view} form={form} setForm={setForm} business={business} /><label className="resource-active-switch"><input type="checkbox" checked={form.active !== false} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />保存后启用该资源</label><div className="resource-form-actions"><button type="button" onClick={() => { setMode('view'); setForm(formFromResource(view, selected)) }}>取消</button><button className="business-primary" disabled={saving}>{saving ? '保存中…' : '保存到数据库'}</button></div></>}{message ? <p className="business-form-message">{message}</p> : null}</form>
