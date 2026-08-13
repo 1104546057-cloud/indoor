@@ -1,18 +1,26 @@
 [Unit]
-Description=Indoor patrol ROS navigation and web control
-After=network-online.target
+Description=Indoor patrol ROS navigation and vehicle agent
 Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=nano1
+Group=nano1
 Environment=HOME=/home/nano1
-WorkingDirectory=/home/nano1
+Environment=USER=nano1
+Environment=ROS_MASTER_URI=http://localhost:11311
+WorkingDirectory=/home/nano1/indoor_patrol_ws
+ExecStartPre=/bin/sleep 8
 ExecStart=/bin/bash -lc 'source /opt/ros/melodic/setup.bash && source /home/nano1/indoor_patrol_ws/devel/setup.bash && exec roslaunch indoor_patrol_bringup web_navigation_control.launch map_file:=/home/nano1/indoor_patrol_maps/active.yaml start_sensors:=true initial_pose_x:=0.0 initial_pose_y:=0.0 initial_pose_a:=0.0'
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=30
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=20
-KillSignal=SIGINT
+SyslogIdentifier=indoor-patrol-ros
 
 [Install]
 WantedBy=multi-user.target

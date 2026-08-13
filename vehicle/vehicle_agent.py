@@ -278,7 +278,17 @@ class VehicleController(object):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        output = process.communicate(timeout=timeout)[0].decode(
+        deadline = time.time() + float(timeout)
+        while process.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        if process.poll() is None:
+            process.terminate()
+            time.sleep(0.2)
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+            raise RuntimeError("ROS command timed out")
+        output = process.communicate()[0].decode(
             "utf-8", "replace"
         )
         if process.returncode:
@@ -295,9 +305,10 @@ class VehicleController(object):
         if process is None or process.poll() is not None:
             return
         process.terminate()
-        try:
-            process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
+        deadline = time.time() + 5.0
+        while process.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        if process.poll() is None:
             process.kill()
 
     def _mapping_preflight(self):
