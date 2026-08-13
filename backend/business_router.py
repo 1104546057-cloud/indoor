@@ -28,6 +28,7 @@ try:
         RecognitionResult,
         Robot,
         Room,
+        RoomMap,
         Route,
         RouteDetail,
         SystemLog,
@@ -52,6 +53,7 @@ except ImportError:
         RecognitionResult,
         Robot,
         Room,
+        RoomMap,
         Route,
         RouteDetail,
         SystemLog,
@@ -144,6 +146,7 @@ class ImageAssetPayload(BaseModel):
 class PointPayload(BaseModel):
     point_code: str
     room_id: int
+    map_id: int | None = None
     cabinet_id: int | None = None
     name: str
     x: float
@@ -156,6 +159,7 @@ class PointPayload(BaseModel):
 class RoutePayload(BaseModel):
     route_code: str
     room_id: int
+    map_id: int | None = None
     name: str
     description: str | None = None
     point_ids: list[int] = Field(min_length=1)
@@ -289,6 +293,7 @@ def _point_json(point: InspectionPoint) -> dict:
         'id': point.id,
         'pointCode': point.point_code,
         'roomId': point.room_id,
+        'mapId': point.map_id,
         'cabinetId': point.cabinet_id,
         'name': point.name,
         'x': point.x,
@@ -305,6 +310,7 @@ def _route_json(route: Route) -> dict:
         'id': route.id,
         'routeCode': route.route_code,
         'roomId': route.room_id,
+        'mapId': route.map_id,
         'name': route.name,
         'description': route.description,
         'active': route.is_active,
@@ -957,6 +963,10 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         require_permission(current_user, 'patrol_tasks', 'create')
         if db.query(InspectionPoint).filter(InspectionPoint.point_code == payload.point_code).first():
             raise HTTPException(status_code=409, detail='巡检点编码已存在')
+        if payload.map_id:
+            room_map = db.get(RoomMap, payload.map_id)
+            if room_map is None or room_map.room_id != payload.room_id:
+                raise HTTPException(status_code=422, detail='巡检点地图必须属于所选电房')
         point = InspectionPoint(**payload.model_dump())
         db.add(point)
         _add_system_log(db, current_user, '巡检任务管理', '新增巡检点', f'{payload.point_code} {payload.name}')
@@ -972,9 +982,18 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         points = [db.get(InspectionPoint, point_id) for point_id in payload.point_ids]
         if any(point is None for point in points):
             raise HTTPException(status_code=404, detail='路线包含不存在的巡检点')
+        if any(point.room_id != payload.room_id for point in points):
+            raise HTTPException(status_code=422, detail='路线巡检点必须属于同一电房')
+        if payload.map_id:
+            room_map = db.get(RoomMap, payload.map_id)
+            if room_map is None or room_map.room_id != payload.room_id:
+                raise HTTPException(status_code=422, detail='路线地图必须属于所选电房')
+            if any(point.map_id not in (None, payload.map_id) for point in points):
+                raise HTTPException(status_code=422, detail='路线包含其他地图版本的巡检点')
         route = Route(
             route_code=payload.route_code,
             room_id=payload.room_id,
+            map_id=payload.map_id,
             name=payload.name,
             description=payload.description,
         )

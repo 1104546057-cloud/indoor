@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+from http.client import RemoteDisconnected
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -236,7 +237,13 @@ def _resolve_vehicle(vehicle_id: str | None):
     return vehicle
 
 
-def _agent_json_request(vehicle, path: str, method: str = 'GET', payload: dict | None = None):
+def _agent_json_request(
+    vehicle,
+    path: str,
+    method: str = 'GET',
+    payload: dict | None = None,
+    timeout: float | None = None,
+):
     """调用指定车辆 Nano 上的 vehicle_agent HTTP API，并返回解析后的 JSON。"""
 
     base_url = vehicle['agent_base_url'].rstrip('/')
@@ -250,7 +257,7 @@ def _agent_json_request(vehicle, path: str, method: str = 'GET', payload: dict |
     request = Request(url, data=data, headers=headers, method=method)
 
     try:
-        with urlopen(request, timeout=VEHICLE_REQUEST_TIMEOUT) as response:
+        with urlopen(request, timeout=timeout or VEHICLE_REQUEST_TIMEOUT) as response:
             body = response.read().decode('utf-8')
             return json.loads(body) if body else {}
     except HTTPError as error:
@@ -261,10 +268,10 @@ def _agent_json_request(vehicle, path: str, method: str = 'GET', payload: dict |
             status_code=error.code if 400 <= error.code < 500 else 502,
             detail=f'车辆 agent 返回错误：HTTP {error.code} {detail}',
         ) from error
-    except URLError as error:
+    except (URLError, RemoteDisconnected, ConnectionResetError, BrokenPipeError) as error:
         raise HTTPException(
             status_code=503,
-            detail=f'无法连接车辆 agent：{error.reason}',
+            detail=f'无法连接车辆 agent：{getattr(error, "reason", error)}',
         ) from error
     except TimeoutError as error:
         raise HTTPException(status_code=504, detail='连接车辆 agent 超时') from error
@@ -418,6 +425,72 @@ def get_lidar_info(vehicle_id):
         'ws_url': ws_url,
         'topic': vehicle.get('lidar_topic', '/lidar/scan'),
     }
+
+
+def _agent_binary_request(vehicle, path: str) -> tuple[bytes, str]:
+    url = f'{vehicle["agent_base_url"].rstrip("/")}{path}'
+    request = Request(url, headers={'Accept': '*/*', 'Cache-Control': 'no-cache'}, method='GET')
+    try:
+        with urlopen(request, timeout=max(VEHICLE_REQUEST_TIMEOUT, 5.0)) as response:
+            return response.read(), response.headers.get_content_type()
+    except HTTPError as error:
+        detail = error.read().decode('utf-8', errors='replace')
+        raise HTTPException(status_code=error.code, detail=detail or str(error)) from error
+    except (URLError, RemoteDisconnected, ConnectionResetError, BrokenPipeError) as error:
+        raise HTTPException(status_code=503, detail=f'无法读取车辆地图：{error}') from error
+    except TimeoutError as error:
+        raise HTTPException(status_code=504, detail='读取车辆地图超时') from error
+
+
+def get_mapping_status(vehicle_id):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/mapping/status')
+
+
+def start_mapping(vehicle_id):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/mapping/start', method='POST', payload={}, timeout=25.0)
+
+
+def stop_mapping(vehicle_id):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/mapping/stop', method='POST', payload={})
+
+
+def discard_mapping(vehicle_id):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/mapping/discard', method='POST', payload={}, timeout=15.0)
+
+
+def save_mapping(vehicle_id, map_id):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/mapping/save', method='POST', payload={'map_id': map_id}, timeout=40.0)
+
+
+def activate_vehicle_map(vehicle_id, map_id):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(vehicle, '/maps/activate', method='POST', payload={'map_id': map_id}, timeout=25.0)
+
+
+def set_vehicle_initial_pose(vehicle_id, x, y, yaw):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_json_request(
+        vehicle,
+        '/localization/initial_pose',
+        method='POST',
+        payload={'x': x, 'y': y, 'yaw': yaw},
+    )
+
+
+def get_live_map_png(vehicle_id):
+    vehicle = _resolve_vehicle(vehicle_id)
+    return _agent_binary_request(vehicle, '/mapping/map.png')
+
+
+def get_vehicle_map_file(vehicle_id, map_id, kind):
+    vehicle = _resolve_vehicle(vehicle_id)
+    query = urlencode({'map_id': map_id, 'kind': kind})
+    return _agent_binary_request(vehicle, f'/maps/file?{query}')
 
 
 def _check_camera_status(vehicle):

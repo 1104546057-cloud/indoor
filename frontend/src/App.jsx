@@ -12,6 +12,7 @@ const DeviceControl = lazy(() => import('./pages/DeviceControl'))
 const DeviceManagement = lazy(() => import('./pages/DeviceManagement'))
 const PatrolExecution3D = lazy(() => import('./pages/PatrolExecution3D'))
 const UserManagement = lazy(() => import('./pages/UserManagement'))
+const RoomMapManagement = lazy(() => import('./pages/RoomMapManagement'))
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
         <Route path="dashboard" element={<PermissionGuard module="patrol_monitor"><Dashboard /></PermissionGuard>} />
         <Route path="users" element={<PermissionGuard module="user_management"><UserManagement /></PermissionGuard>} />
         <Route path="devices" element={<PermissionGuard module="device_resources"><DeviceManagement /></PermissionGuard>} />
+        <Route path="devices/rooms/:roomId/maps" element={<PermissionGuard module="device_resources"><RoomMapManagement /></PermissionGuard>} />
         <Route path="device-control" element={<PermissionGuard module="patrol_monitor"><DeviceControl /></PermissionGuard>} />
         <Route path="patrol-3d" element={<PermissionGuard module="patrol_tasks"><PatrolExecution3D /></PermissionGuard>} />
         <Route path="cluster" element={<PermissionGuard module="device_resources"><ClusterManagement /></PermissionGuard>} />

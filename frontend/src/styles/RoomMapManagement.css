@@ -1,0 +1,77 @@
+.room-map-page { min-height: 100%; padding: 18px; color: #def8fc; background: radial-gradient(circle at 50% 0, rgba(25, 130, 151, .16), transparent 40%); }
+.room-map-header { display: flex; justify-content: space-between; align-items: end; margin-bottom: 14px; }
+.room-map-header > div:first-child { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 3px 14px; }
+.room-map-header button { color: #8fdbe7; border: 0; background: transparent; cursor: pointer; }
+.room-map-header span { color: #5ea7b5; font: 10px/1.2 monospace; letter-spacing: .16em; }
+.room-map-header h1 { grid-column: 1 / -1; margin: 0; font-size: 25px; }
+.room-map-mode { display: grid; grid-template-columns: 12px auto; gap: 3px 9px; align-items: center; min-width: 190px; padding: 10px 14px; border: 1px solid rgba(112, 211, 228, .25); background: rgba(4, 33, 47, .76); }
+.room-map-mode i { grid-row: 1 / 3; width: 9px; height: 9px; border-radius: 50%; background: #f3ba58; box-shadow: 0 0 10px currentColor; }
+.room-map-mode i.active { color: #50edbc; background: currentColor; }
+.room-map-mode strong { font-size: 13px; }
+.room-map-notice { display: flex; justify-content: space-between; margin-bottom: 12px; padding: 9px 12px; color: #bdf7fa; border-left: 3px solid #42e2d0; background: rgba(15, 92, 104, .34); }
+.room-map-notice button { color: inherit; border: 0; background: none; }
+.room-map-layout { display: grid; grid-template-columns: minmax(280px, .72fr) minmax(520px, 1.45fr) minmax(250px, .62fr); gap: 12px; min-height: 590px; }
+.room-map-panel { min-width: 0; padding: 14px; border: 1px solid rgba(112, 211, 228, .2); background: linear-gradient(145deg, rgba(6, 48, 66, .91), rgba(3, 27, 40, .94)); box-shadow: inset 0 0 24px rgba(33, 151, 173, .05); }
+.room-map-panel-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 42px; margin-bottom: 12px; border-bottom: 1px solid rgba(112, 211, 228, .13); }
+.room-map-panel-title > div { display: grid; gap: 2px; }
+.room-map-panel-title span { color: #5f9eaa; font: 9px/1.2 monospace; letter-spacing: .18em; }
+.room-map-panel-title h2 { margin: 0; font-size: 15px; }
+.room-map-panel-title b { color: #7ed9e6; font-size: 11px; font-weight: 500; }
+.room-map-panel-title label { display: flex; align-items: center; gap: 8px; color: #77aeb7; font-size: 11px; }
+.room-map-panel-title select { min-height: 30px; color: #e5fbff; border: 1px solid rgba(112, 211, 228, .24); background: #082f40; }
+.room-map-library { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.room-map-list { min-height: 0; display: grid; align-content: start; gap: 8px; overflow: auto; }
+.room-map-list > button { position: relative; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 9px; align-items: center; width: 100%; padding: 7px; color: #dff9fd; border: 1px solid rgba(112, 211, 228, .13); background: rgba(5, 39, 54, .68); text-align: left; }
+.room-map-list > button.selected { border-color: rgba(62, 229, 212, .65); background: rgba(15, 87, 98, .48); }
+.room-map-list img { width: 76px; height: 58px; object-fit: contain; background: #d0d0d0; }
+.room-map-list div { min-width: 0; display: grid; gap: 3px; }
+.room-map-list strong, .room-map-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-map-list span, .room-map-list small { color: #79a9b3; font-size: 10px; }
+.room-map-list em { position: absolute; top: 5px; right: 5px; padding: 2px 5px; color: #55e7b8; border: 1px solid currentColor; font-size: 9px; font-style: normal; }
+.room-map-empty-list { padding: 30px 12px; color: #719ca4; text-align: center; }
+.room-map-version-detail { padding-top: 12px; border-top: 1px solid rgba(112, 211, 228, .14); }
+.room-map-version-detail dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 0 10px; }
+.room-map-version-detail dl div { padding: 7px; background: rgba(2, 26, 38, .55); }
+.room-map-version-detail dt { color: #668f98; font-size: 10px; }
+.room-map-version-detail dd { margin: 3px 0 0; font-size: 11px; }
+.room-map-version-detail button, .room-map-import, .room-map-save button, .room-map-actions button, .room-map-pose-form button { width: 100%; min-height: 34px; color: #dffaff; border: 1px solid rgba(55, 224, 210, .42); background: rgba(12, 94, 102, .6); }
+.room-map-import { margin-top: 10px; }
+.room-map-version-detail button:disabled, .room-map-actions button:disabled, .room-map-save button:disabled, .room-map-pose-form button:disabled { opacity: .4; }
+.room-map-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.room-map-live { min-height: 0; position: relative; display: grid; place-items: center; overflow: hidden; background-color: #b8b8b8; background-image: linear-gradient(rgba(40,40,40,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(40,40,40,.12) 1px, transparent 1px); background-size: 20px 20px; }
+.room-map-canvas { position: relative; width: fit-content; max-width: 100%; max-height: 100%; margin: auto; overflow: hidden; }
+.room-map-canvas img { display: block; max-width: 100%; max-height: 490px; width: auto; height: auto; object-fit: contain; image-rendering: pixelated; user-select: none; }
+.room-map-canvas.interactive { cursor: crosshair; }
+.room-map-empty { min-width: 260px; min-height: 320px; display: grid; place-content: center; gap: 8px; color: #526168; text-align: center; }
+.room-map-empty b { font: 38px/1 monospace; letter-spacing: .2em; }
+.room-map-robot { position: absolute; z-index: 2; color: #00a9e8; font-style: normal; filter: drop-shadow(0 0 3px #fff); transform-origin: 50% 50%; }
+.room-map-telemetry { position: absolute; inset: auto 8px 8px; z-index: 3; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; pointer-events: none; }
+.room-map-telemetry span { display: grid; padding: 5px 7px; color: #7eb6c0; background: rgba(2, 29, 42, .86); font-size: 9px; }
+.room-map-telemetry b { margin-top: 2px; color: #ecfdff; font-size: 11px; }
+.room-map-actions { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 7px; margin-top: 10px; }
+.room-map-actions .primary { background: rgba(8, 125, 116, .72); }
+.room-map-actions .danger { color: #ff9ca9; border-color: rgba(255, 103, 124, .42); background: rgba(105, 28, 42, .42); }
+.room-map-save { display: grid; grid-template-columns: 1fr 1fr 140px; gap: 7px; margin-top: 7px; }
+.room-map-save input { min-width: 0; padding: 0 9px; color: #e6fbff; border: 1px solid rgba(112, 211, 228, .2); background: rgba(3, 30, 43, .75); }
+.room-map-control { display: grid; grid-template-rows: auto auto auto 1fr; align-content: start; }
+.room-map-dpad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(3, 64px); justify-content: center; gap: 5px; margin: 28px 0; }
+.room-map-dpad button { display: grid; place-content: center; color: #c9f6fa; border: 1px solid rgba(112, 211, 228, .25); background: rgba(6, 55, 71, .72); touch-action: none; user-select: none; }
+.room-map-dpad button:active { color: #fff; background: rgba(23, 153, 150, .72); }
+.room-map-dpad button:disabled { opacity: .25; }
+.room-map-dpad b { font-size: 22px; }
+.room-map-dpad span { font-size: 9px; }
+.room-map-dpad .forward { grid-column: 2; grid-row: 1; }.room-map-dpad .left { grid-column: 1; grid-row: 2; }.room-map-dpad .stop { grid-column: 2; grid-row: 2; color: #ff8294; border-color: rgba(255, 95, 118, .45); }.room-map-dpad .right { grid-column: 3; grid-row: 2; }.room-map-dpad .backward { grid-column: 2; grid-row: 3; }
+.room-map-control p, .room-map-pose-form p { color: #729fa8; font-size: 11px; line-height: 1.7; }
+.room-map-safety { display: grid; gap: 7px; }
+.room-map-safety span { display: flex; justify-content: space-between; padding: 8px; color: #729fa8; border: 1px solid rgba(112, 211, 228, .12); font-size: 10px; }
+.room-map-safety b { color: #dffaff; }
+.room-map-localization { margin-top: 12px; }
+.room-map-localization-grid { display: grid; grid-template-columns: minmax(420px, 1fr) 300px; gap: 14px; align-items: center; }
+.room-map-localization .room-map-canvas { max-height: 420px; background: #bbb; }
+.room-map-localization .room-map-canvas img { max-height: 420px; }
+.room-map-pose-form { display: grid; gap: 8px; }
+.room-map-pose-form label { display: grid; grid-template-columns: 1fr 120px; align-items: center; gap: 8px; color: #81afb7; font-size: 11px; }
+.room-map-pose-form input { min-height: 31px; padding: 0 8px; color: #e8fbff; border: 1px solid rgba(112, 211, 228, .2); background: rgba(3, 30, 43, .75); }
+.resource-actions .map-entry { color: #58ead0; border-color: rgba(66, 226, 208, .48); }
+@media (max-width: 1300px) { .room-map-layout { grid-template-columns: 300px minmax(500px, 1fr); }.room-map-control { grid-column: 1 / -1; }.room-map-dpad { margin: 10px auto; }.room-map-control p, .room-map-safety { max-width: 600px; margin-left: auto; margin-right: auto; width: 100%; } }
+@media (max-width: 900px) { .room-map-page { padding: 10px; }.room-map-layout, .room-map-localization-grid { grid-template-columns: 1fr; }.room-map-save, .room-map-actions { grid-template-columns: 1fr; }.room-map-header { align-items: start; gap: 10px; }.room-map-telemetry { grid-template-columns: 1fr 1fr; } }

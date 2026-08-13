@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 try:
     from .business_router import create_business_router
+    from .mapping_router import create_mapping_router
     from .database import Base, engine, get_db
     from .inspection_service import apply_threshold_rules
     from .navigation_workflow import (
@@ -69,6 +70,7 @@ try:
     )
 except ImportError:
     from business_router import create_business_router
+    from mapping_router import create_mapping_router
     from database import Base, engine, get_db
     from inspection_service import apply_threshold_rules
     from navigation_workflow import (
@@ -351,6 +353,7 @@ def get_current_user(
 
 # 业务资源模块共享现有 Cookie/JWT 鉴权，不另外复制一套登录逻辑。
 app.include_router(create_business_router(get_current_user))
+app.include_router(create_mapping_router(get_current_user))
 
 
 @app.get("/")

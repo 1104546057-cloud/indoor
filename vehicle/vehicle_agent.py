@@ -12,9 +12,14 @@ avoids newer Python syntax.
 
 import json
 import math
+import os
+import re
+import struct
+import subprocess
 import threading
 import time
 import uuid
+import zlib
 
 try:
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -48,6 +53,16 @@ try:
     from nav_msgs.msg import Odometry
 except ImportError:
     Odometry = None
+
+try:
+    from nav_msgs.msg import OccupancyGrid
+except ImportError:
+    OccupancyGrid = None
+
+try:
+    from sensor_msgs.msg import LaserScan
+except ImportError:
+    LaserScan = None
 
 try:
     import tf
@@ -118,6 +133,33 @@ class VehicleController(object):
         self.odom_angular_z = 0.0
         self.amcl_pose_stamp = None
         self.amcl_covariance = None
+        self.odom_stamp = None
+        self.lidar_stamp = None
+        self.map_message = None
+        self.map_stamp = None
+        self.mapping_started_at = None
+        self.mapping_last_error = None
+        self.runtime_mode = "navigation"
+        self.active_map_id = None
+        self.mode_process = None
+        self.map_directory = os.path.expanduser(
+            rospy.get_param("~map_directory", "~/indoor_patrol_maps")
+        )
+        self.workspace_setup = os.path.expanduser(
+            rospy.get_param(
+                "~workspace_setup",
+                "~/indoor_patrol_ws/devel/setup.bash",
+            )
+        )
+        self.mapping_launch = rospy.get_param(
+            "~mapping_launch",
+            "indoor_patrol_navigation slam.launch start_sensors:=false",
+        )
+        self.navigation_launch = rospy.get_param(
+            "~navigation_launch",
+            "indoor_patrol_navigation navigation.launch start_sensors:=false",
+        )
+        self._load_active_map_state()
         self.tf_listener = tf.TransformListener() if tf is not None else None
         self.publisher = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         self.voltage_subscriber = rospy.Subscriber(
@@ -130,6 +172,19 @@ class VehicleController(object):
                 "/odom",
                 Odometry,
                 self._odom_callback,
+            )
+        if LaserScan is not None:
+            self.lidar_subscriber = rospy.Subscriber(
+                "/lidar/scan_filtered",
+                LaserScan,
+                self._lidar_callback,
+            )
+        if OccupancyGrid is not None:
+            self.map_subscriber = rospy.Subscriber(
+                "/map",
+                OccupancyGrid,
+                self._map_callback,
+                queue_size=1,
             )
         if PoseWithCovarianceStamped is not None:
             self.amcl_pose_subscriber = rospy.Subscriber(
@@ -155,6 +210,371 @@ class VehicleController(object):
         )
         self.navigation_state = self._idle_navigation_state()
         self.route_thread = None
+
+    def _active_map_state_path(self):
+        return os.path.join(self.map_directory, "active_map.json")
+
+    def _load_active_map_state(self):
+        try:
+            with open(self._active_map_state_path(), "r") as handle:
+                state = json.load(handle)
+            self.active_map_id = state.get("map_id")
+        except (IOError, OSError, ValueError):
+            self.active_map_id = "first_floor"
+
+    def _save_active_map_state(self, map_id, yaml_path):
+        if not os.path.isdir(self.map_directory):
+            os.makedirs(self.map_directory)
+        state = {
+            "map_id": map_id,
+            "yaml_path": yaml_path,
+            "activated_at": time.time(),
+        }
+        temporary = self._active_map_state_path() + ".tmp"
+        with open(temporary, "w") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.rename(temporary, self._active_map_state_path())
+        active_yaml = os.path.join(self.map_directory, "active.yaml")
+        temporary_link = active_yaml + ".tmp"
+        try:
+            if os.path.lexists(temporary_link):
+                os.unlink(temporary_link)
+            os.symlink(yaml_path, temporary_link)
+            os.rename(temporary_link, active_yaml)
+        except (IOError, OSError):
+            if os.path.lexists(temporary_link):
+                os.unlink(temporary_link)
+            raise
+        self.active_map_id = map_id
+
+    def _lidar_callback(self, _msg):
+        with self.lock:
+            self.lidar_stamp = time.time()
+
+    def _map_callback(self, msg):
+        with self.lock:
+            self.map_message = msg
+            self.map_stamp = time.time()
+
+    def _ros_shell(self, command, wait=True, timeout=20.0):
+        shell_command = (
+            "source /opt/ros/melodic/setup.bash && "
+            "source %s && %s" % (self.workspace_setup, command)
+        )
+        if not wait:
+            log_directory = os.path.expanduser("~/indoor_patrol_logs")
+            if not os.path.isdir(log_directory):
+                os.makedirs(log_directory)
+            log_path = os.path.join(log_directory, "vehicle_agent_mode.log")
+            log_handle = open(log_path, "ab", 0)
+            return subprocess.Popen(
+                ["bash", "-lc", shell_command],
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+            )
+        process = subprocess.Popen(
+            ["bash", "-lc", shell_command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        output = process.communicate(timeout=timeout)[0].decode(
+            "utf-8", "replace"
+        )
+        if process.returncode:
+            raise RuntimeError(output.strip() or "ROS command failed")
+        return output.strip()
+
+    def _kill_nodes(self, names):
+        command = "rosnode kill %s >/dev/null 2>&1 || true" % " ".join(names)
+        self._ros_shell(command)
+
+    def _terminate_mode_process(self):
+        process = self.mode_process
+        self.mode_process = None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+    def _mapping_preflight(self):
+        now = time.time()
+        with self.lock:
+            if self.navigation_state.get("active"):
+                raise RuntimeError("a navigation route is still active")
+            odom_age = None if self.odom_stamp is None else now - self.odom_stamp
+            lidar_age = None if self.lidar_stamp is None else now - self.lidar_stamp
+        if odom_age is None or odom_age > 2.0:
+            raise RuntimeError("odometry is not fresh")
+        if lidar_age is None or lidar_age > 2.0:
+            raise RuntimeError("filtered lidar scan is not fresh")
+
+    def start_mapping(self):
+        self._mapping_preflight()
+        self.stop()
+        if self.move_base_client is not None:
+            try:
+                self.move_base_client.cancel_all_goals()
+            except Exception:
+                pass
+        with self.lock:
+            if self.runtime_mode == "mapping":
+                return self.mapping_status()
+            self.mapping_last_error = None
+        self._terminate_mode_process()
+        self._kill_nodes(["/navigation_safety", "/move_base", "/amcl", "/map_server"])
+        process = self._ros_shell(
+            "roslaunch %s" % self.mapping_launch,
+            wait=False,
+        )
+        with self.lock:
+            self.mode_process = process
+            self.runtime_mode = "mapping"
+            self.mapping_started_at = time.time()
+            self.map_message = None
+            self.map_stamp = None
+        deadline = time.time() + 15.0
+        while time.time() < deadline:
+            with self.lock:
+                if self.map_message is not None:
+                    return self.mapping_status()
+            if process.poll() is not None:
+                with self.lock:
+                    self.runtime_mode = "fault"
+                    self.mapping_last_error = "Cartographer exited; see vehicle_agent_mode.log"
+                raise RuntimeError(self.mapping_last_error)
+            time.sleep(0.25)
+        with self.lock:
+            self.mapping_last_error = "timed out waiting for Cartographer /map"
+        raise RuntimeError(self.mapping_last_error)
+
+    def stop_mapping(self):
+        self.stop()
+        with self.lock:
+            if self.runtime_mode != "mapping":
+                return self.mapping_status()
+            self.runtime_mode = "mapping_stopped"
+        return self.mapping_status()
+
+    def discard_mapping(self):
+        self.stop()
+        self._terminate_mode_process()
+        self._kill_nodes([
+            "/cartographer_node",
+            "/cartographer_occupancy_grid_node",
+        ])
+        with self.lock:
+            self.runtime_mode = "idle"
+            self.mapping_started_at = None
+            self.map_message = None
+            self.map_stamp = None
+        return self.mapping_status()
+
+    @staticmethod
+    def _safe_map_id(value):
+        value = str(value or "").strip()
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$", value):
+            raise ValueError("invalid map_id")
+        return value
+
+    def save_mapping(self, map_id):
+        map_id = self._safe_map_id(map_id)
+        with self.lock:
+            if self.runtime_mode not in ("mapping", "mapping_stopped"):
+                raise RuntimeError("mapping mode is not active")
+            if self.map_message is None:
+                raise RuntimeError("no occupancy map is available")
+        if not os.path.isdir(self.map_directory):
+            os.makedirs(self.map_directory)
+        prefix = os.path.join(self.map_directory, map_id)
+        self._ros_shell(
+            "rosrun map_server map_saver -f %s map:=/map" % prefix,
+            timeout=30.0,
+        )
+        return dict(self.map_metadata(), map_id=map_id, files={
+            "yaml": prefix + ".yaml",
+            "pgm": prefix + ".pgm",
+        })
+
+    def list_maps(self):
+        maps = []
+        if not os.path.isdir(self.map_directory):
+            return maps
+        for filename in sorted(os.listdir(self.map_directory)):
+            if not filename.endswith(".yaml"):
+                continue
+            map_id = filename[:-5]
+            if map_id == "active":
+                continue
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$", map_id):
+                continue
+            maps.append({
+                "map_id": map_id,
+                "yaml_path": os.path.join(self.map_directory, filename),
+                "active": map_id == self.active_map_id,
+            })
+        return maps
+
+    def map_file(self, map_id, kind):
+        map_id = self._safe_map_id(map_id)
+        extensions = {"yaml": ".yaml", "pgm": ".pgm"}
+        extension = extensions.get(kind)
+        if extension is None:
+            raise ValueError("unsupported map file kind")
+        path = os.path.join(self.map_directory, map_id + extension)
+        if not os.path.isfile(path):
+            raise ValueError("map file not found")
+        with open(path, "rb") as handle:
+            return handle.read()
+
+    def activate_map(self, map_id):
+        map_id = self._safe_map_id(map_id)
+        yaml_path = os.path.join(self.map_directory, map_id + ".yaml")
+        if not os.path.isfile(yaml_path):
+            raise ValueError("map file not found")
+        self.stop()
+        if self.move_base_client is not None:
+            try:
+                self.move_base_client.cancel_all_goals()
+            except Exception:
+                pass
+        self._terminate_mode_process()
+        self._kill_nodes([
+            "/cartographer_node",
+            "/cartographer_occupancy_grid_node",
+            "/navigation_safety",
+            "/move_base",
+            "/amcl",
+            "/map_server",
+        ])
+        process = self._ros_shell(
+            "roslaunch %s map_file:=%s" % (self.navigation_launch, yaml_path),
+            wait=False,
+        )
+        with self.lock:
+            self.mode_process = process
+            self.runtime_mode = "navigation"
+            self.mapping_started_at = None
+            self.map_message = None
+            self.map_stamp = None
+        deadline = time.time() + 15.0
+        while time.time() < deadline:
+            with self.lock:
+                ready = self.map_message is not None
+            if ready:
+                self._save_active_map_state(map_id, yaml_path)
+                return self.mapping_status()
+            if process.poll() is not None:
+                raise RuntimeError("navigation launch exited; see vehicle_agent_mode.log")
+            time.sleep(0.25)
+        raise RuntimeError("timed out waiting for navigation map")
+
+    def set_initial_pose(self, x, y, yaw):
+        if PoseWithCovarianceStamped is None:
+            raise RuntimeError("geometry_msgs/PoseWithCovarianceStamped is unavailable")
+        values = [float(x), float(y), float(yaw)]
+        if not all(is_finite_number(value) for value in values):
+            raise ValueError("initial pose must contain finite numbers")
+        publisher = rospy.Publisher(
+            "/initialpose",
+            PoseWithCovarianceStamped,
+            queue_size=1,
+            latch=True,
+        )
+        message = PoseWithCovarianceStamped()
+        message.header.stamp = rospy.Time.now()
+        message.header.frame_id = self.map_frame
+        message.pose.pose.position.x = values[0]
+        message.pose.pose.position.y = values[1]
+        quaternion = quaternion_from_yaw(values[2])
+        message.pose.pose.orientation.x = quaternion["x"]
+        message.pose.pose.orientation.y = quaternion["y"]
+        message.pose.pose.orientation.z = quaternion["z"]
+        message.pose.pose.orientation.w = quaternion["w"]
+        message.pose.covariance[0] = 0.25
+        message.pose.covariance[7] = 0.25
+        message.pose.covariance[35] = 0.0685
+        deadline = time.time() + 1.0
+        while publisher.get_num_connections() == 0 and time.time() < deadline:
+            time.sleep(0.05)
+        publisher.publish(message)
+        return {"accepted": True, "x": values[0], "y": values[1], "yaw": values[2]}
+
+    def map_metadata(self):
+        with self.lock:
+            message = self.map_message
+            stamp = self.map_stamp
+        if message is None:
+            return {"available": False}
+        origin = message.info.origin.position
+        return {
+            "available": True,
+            "revision": int((stamp or 0.0) * 1000),
+            "resolution": float(message.info.resolution),
+            "width": int(message.info.width),
+            "height": int(message.info.height),
+            "origin": [float(origin.x), float(origin.y), 0.0],
+            "updated_at": stamp,
+        }
+
+    def mapping_status(self):
+        with self.lock:
+            started_at = self.mapping_started_at
+            mode = self.runtime_mode
+            error = self.mapping_last_error
+            odom_age = None if self.odom_stamp is None else max(0.0, time.time() - self.odom_stamp)
+            lidar_age = None if self.lidar_stamp is None else max(0.0, time.time() - self.lidar_stamp)
+        pose_snapshot = self._pose_snapshot()
+        return {
+            "mode": mode,
+            "active_map_id": self.active_map_id,
+            "mapping_started_at": started_at,
+            "elapsed_seconds": None if started_at is None else max(0.0, time.time() - started_at),
+            "last_error": error,
+            "odom_age": odom_age,
+            "lidar_age": lidar_age,
+            "map": self.map_metadata(),
+            "pose": pose_snapshot["pose"],
+            "localization": pose_snapshot["localization"],
+        }
+
+    @staticmethod
+    def _png_chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(
+            ">I", zlib.crc32(kind + data) & 0xffffffff
+        )
+
+    def map_png(self):
+        with self.lock:
+            message = self.map_message
+        if message is None:
+            raise ValueError("map is not available")
+        width = int(message.info.width)
+        height = int(message.info.height)
+        values = list(message.data)
+        rows = []
+        for source_y in range(height - 1, -1, -1):
+            offset = source_y * width
+            row = bytearray([0])
+            for value in values[offset:offset + width]:
+                if value < 0:
+                    shade = 205
+                elif value >= 65:
+                    shade = 20
+                else:
+                    shade = 254
+                row.extend((shade, shade, shade))
+            rows.append(bytes(row))
+        header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + self._png_chunk(b"IHDR", header)
+            + self._png_chunk(b"IDAT", zlib.compress(b"".join(rows), 6))
+            + self._png_chunk(b"IEND", b"")
+        )
 
     def _idle_navigation_state(self):
         return {
@@ -251,6 +671,7 @@ class VehicleController(object):
         with self.lock:
             self.odom_linear_x = float(msg.twist.twist.linear.x)
             self.odom_angular_z = float(msg.twist.twist.angular.z)
+            self.odom_stamp = time.time()
 
     def _amcl_pose_callback(self, msg):
         covariance = list(msg.pose.covariance)
@@ -349,6 +770,11 @@ class VehicleController(object):
             localization["last_error"] = str(error)
             return None, localization
 
+    def _pose_snapshot(self):
+        with self.lock:
+            pose, localization = self._map_pose_snapshot_locked()
+        return {"pose": pose, "localization": localization}
+
     def _cancel_navigation_locked(self, reason="cancelled"):
         was_active = bool(self.navigation_state.get("active"))
         if self.move_base_client is not None:
@@ -428,6 +854,8 @@ class VehicleController(object):
             "odom_angular_z": self.odom_angular_z,
             "pose": pose,
             "localization": localization,
+            "runtime_mode": self.runtime_mode,
+            "active_map_id": self.active_map_id,
             "navigation_available": self.navigation_available,
             "navigation": self._navigation_snapshot_locked(),
         }
@@ -758,6 +1186,15 @@ def make_handler(controller):
             except ValueError:
                 return None
 
+        def _send_bytes(self, status_code, body, content_type):
+            self.send_response(status_code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _send_error_json(self, status_code, message):
             self._send_json(status_code, {"detail": message})
 
@@ -766,6 +1203,39 @@ def make_handler(controller):
 
         def do_GET(self):
             parsed = urlparse(self.path)
+            if parsed.path == "/mapping/status":
+                self._send_json(200, controller.mapping_status())
+                return
+
+            if parsed.path == "/mapping/map.png":
+                try:
+                    self._send_bytes(200, controller.map_png(), "image/png")
+                except ValueError as error:
+                    self._send_error_json(404, str(error))
+                return
+
+            if parsed.path == "/maps":
+                self._send_json(200, {"maps": controller.list_maps()})
+                return
+
+            if parsed.path == "/maps/file":
+                query = parse_qs(parsed.query)
+                try:
+                    kind = query.get("kind", [None])[0]
+                    body = controller.map_file(
+                        query.get("map_id", [None])[0],
+                        kind,
+                    )
+                    content_type = (
+                        "application/x-yaml"
+                        if kind == "yaml"
+                        else "image/x-portable-graymap"
+                    )
+                    self._send_bytes(200, body, content_type)
+                except ValueError as error:
+                    self._send_error_json(404, str(error))
+                return
+
             if parsed.path == "/navigation_route/status":
                 query = parse_qs(parsed.query)
                 execution_id = query.get("execution_id", [None])[0]
@@ -786,6 +1256,69 @@ def make_handler(controller):
 
         def do_POST(self):
             parsed = urlparse(self.path)
+            if parsed.path == "/mapping/start":
+                try:
+                    self._send_json(202, controller.start_mapping())
+                except RuntimeError as error:
+                    self._send_error_json(409, str(error))
+                return
+
+            if parsed.path == "/mapping/stop":
+                self._send_json(200, controller.stop_mapping())
+                return
+
+            if parsed.path == "/mapping/discard":
+                self._send_json(200, controller.discard_mapping())
+                return
+
+            if parsed.path == "/mapping/save":
+                data = self._read_json()
+                if data is None:
+                    self._send_error_json(400, "Invalid JSON")
+                    return
+                try:
+                    self._send_json(
+                        201,
+                        controller.save_mapping(data.get("map_id")),
+                    )
+                except ValueError as error:
+                    self._send_error_json(400, str(error))
+                except RuntimeError as error:
+                    self._send_error_json(409, str(error))
+                return
+
+            if parsed.path == "/maps/activate":
+                data = self._read_json()
+                if data is None:
+                    self._send_error_json(400, "Invalid JSON")
+                    return
+                try:
+                    self._send_json(
+                        200,
+                        controller.activate_map(data.get("map_id")),
+                    )
+                except ValueError as error:
+                    self._send_error_json(404, str(error))
+                except RuntimeError as error:
+                    self._send_error_json(409, str(error))
+                return
+
+            if parsed.path == "/localization/initial_pose":
+                data = self._read_json()
+                if data is None:
+                    self._send_error_json(400, "Invalid JSON")
+                    return
+                try:
+                    self._send_json(
+                        200,
+                        controller.set_initial_pose(
+                            data.get("x"), data.get("y"), data.get("yaw")
+                        ),
+                    )
+                except (TypeError, ValueError) as error:
+                    self._send_error_json(400, str(error))
+                return
+
             if parsed.path == "/cmd_vel":
                 data = self._read_json()
                 if data is None:

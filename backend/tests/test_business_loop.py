@@ -12,6 +12,7 @@ os.environ['AUTO_CREATE_TABLES'] = 'false'
 from fastapi.testclient import TestClient  # noqa: E402
 
 import backend.business_router as business_router_module  # noqa: E402
+import backend.mapping_router as mapping_router_module  # noqa: E402
 import backend.main as main_module  # noqa: E402
 import backend.vehicle_client as vehicle_client_module  # noqa: E402
 from backend.database import Base, SessionLocal, engine, get_db  # noqa: E402
@@ -739,3 +740,124 @@ def test_vehicle_registry_and_database_archive_are_updated_together(monkeypatch)
     deleted = client.delete(f'/api/business/robots/{robot_id}?hard=true')
     assert deleted.status_code == 200
     assert robot_code not in registry
+
+
+def test_room_mapping_is_saved_versioned_and_activated(monkeypatch, tmp_path):
+    room_code = f'ROOM-MAP-{uuid4().hex[:8]}'
+    room = client.post('/api/business/rooms', json={
+        'room_code': room_code,
+        'name': '网页建图测试电房',
+        'location': '测试区',
+        'is_active': True,
+    })
+    assert room.status_code == 200
+    room_id = room.json()['id']
+    monkeypatch.setattr(mapping_router_module, 'MAP_ASSET_ROOT', tmp_path)
+
+    started = []
+    monkeypatch.setattr(mapping_router_module, 'start_mapping', lambda vehicle_id: started.append(vehicle_id) or {
+        'mode': 'mapping',
+        'map': {'available': True, 'revision': 1},
+    })
+    start_response = client.post(
+        f'/api/business/rooms/{room_id}/mapping/start',
+        json={'vehicle_id': 'nano1'},
+    )
+    assert start_response.status_code == 202
+    assert started == ['nano1']
+
+    monkeypatch.setattr(mapping_router_module, 'save_mapping', lambda vehicle_id, map_id: {
+        'map_id': map_id,
+        'resolution': 0.05,
+        'width': 120,
+        'height': 80,
+        'origin': [-3.0, -2.0, 0.0],
+    })
+    monkeypatch.setattr(mapping_router_module, 'get_vehicle_map_file', lambda _vehicle_id, _map_id, kind: (
+        b'image: map.pgm\nresolution: 0.05\norigin: [-3.0, -2.0, 0.0]\n'
+        if kind == 'yaml' else b'P5\n1 1\n255\n\xfe',
+        'application/octet-stream',
+    ))
+    monkeypatch.setattr(mapping_router_module, 'get_live_map_png', lambda _vehicle_id: (
+        b'\x89PNG\r\n\x1a\npreview', 'image/png'
+    ))
+
+    saved = client.post(f'/api/business/rooms/{room_id}/mapping/save', json={
+        'vehicle_id': 'nano1',
+        'name': '测试地图',
+        'description': '自动化测试生成',
+    })
+    assert saved.status_code == 201
+    map_record = saved.json()['map']
+    assert map_record['roomId'] == room_id
+    assert map_record['version'] == 1
+    assert map_record['resolution'] == 0.05
+    preview = client.get(map_record['previewUrl'])
+    assert preview.status_code == 200
+    assert preview.content.startswith(b'\x89PNG')
+
+    monkeypatch.setattr(mapping_router_module, 'activate_vehicle_map', lambda vehicle_id, map_id: {
+        'mode': 'navigation', 'vehicle_id': vehicle_id, 'active_map_id': map_id,
+    })
+    activated = client.post(
+        f'/api/business/maps/{map_record["id"]}/activate',
+        json={'vehicle_id': 'nano1'},
+    )
+    assert activated.status_code == 200
+    assert activated.json()['map']['active'] is True
+
+    wrong_vehicle = client.post(
+        f'/api/business/maps/{map_record["id"]}/activate',
+        json={'vehicle_id': 'nano2'},
+    )
+    assert wrong_vehicle.status_code == 409
+
+    listing = client.get(f'/api/business/rooms/{room_id}/maps')
+    assert listing.status_code == 200
+    assert listing.json()['maps'][0]['mapCode'] == map_record['mapCode']
+
+
+def test_current_vehicle_map_can_be_imported_into_room(monkeypatch, tmp_path):
+    room = client.post('/api/business/rooms', json={
+        'room_code': f'ROOM-IMPORT-{uuid4().hex[:8]}',
+        'name': '现有地图导入电房',
+        'location': '测试区',
+        'is_active': True,
+    })
+    room_id = room.json()['id']
+    map_code = f'current_{uuid4().hex[:8]}'
+    monkeypatch.setattr(mapping_router_module, 'MAP_ASSET_ROOT', tmp_path)
+    monkeypatch.setattr(mapping_router_module, 'get_mapping_status', lambda _vehicle_id: {
+        'mode': 'navigation',
+        'active_map_id': map_code,
+        'map': {
+            'available': True,
+            'resolution': 0.05,
+            'width': 32,
+            'height': 48,
+            'origin': [-1.0, -2.0, 0.0],
+        },
+    })
+    monkeypatch.setattr(mapping_router_module, 'get_vehicle_map_file', lambda _vehicle_id, _map_id, kind: (
+        b'image: map.pgm\nresolution: 0.05\n' if kind == 'yaml' else b'P5\n1 1\n255\n\xfe',
+        'application/octet-stream',
+    ))
+    monkeypatch.setattr(mapping_router_module, 'get_live_map_png', lambda _vehicle_id: (
+        b'\x89PNG\r\n\x1a\npreview', 'image/png'
+    ))
+
+    imported = client.post(f'/api/business/rooms/{room_id}/maps/import-current', json={
+        'vehicle_id': 'nano1',
+        'name': '原有一层地图',
+    })
+    assert imported.status_code == 201
+    assert imported.json()['imported'] is True
+    assert imported.json()['map']['mapCode'] == map_code
+    assert imported.json()['map']['active'] is True
+
+    repeated = client.post(f'/api/business/rooms/{room_id}/maps/import-current', json={
+        'vehicle_id': 'nano1',
+        'name': '不会重复创建',
+    })
+    assert repeated.status_code == 201
+    assert repeated.json()['imported'] is False

@@ -82,7 +82,10 @@ AUTO_CREATE_TABLES=false
 2. “巡检任务管理”维护巡检点、正式路线、任务下发、巡检记录和现场图片；
 3. “室内巡检监控”展示车辆、任务、AI 结果和告警闭环；
 4. “系统用户管理”维护真实账号、角色、启用状态和操作审计日志；
-5. 车辆 agent 调用 `POST /api/business/tasks/{task_id}/status` 回传进度，NX 服务调用 `POST /api/recognition/results` 上报识别结果和图片。
+5. “设备管理 → 电房档案 → 地图管理”提供 Cartographer 实时建图、低速遥控、地图版本归档与切换，以及 AMCL 初始位姿设置；
+6. 车辆 agent 调用 `POST /api/business/tasks/{task_id}/status` 回传进度，NX 服务调用 `POST /api/recognition/results` 上报识别结果和图片。
+
+网页建图开始前会校验车辆里程计与过滤后雷达数据是否新鲜，并取消当前导航；方向键采用按住发送、松开停车，车端仍保留独立的速度限制和命令超时归零。地图只能由创建它的车辆激活，切换后通过 `active.yaml` 保持重启一致性。
 
 本机自动化测试会替换网络发送函数，避免在开发机上误连车辆；产品代码中没有测试设备、异常场景或手工推进任务接口。实车验收需要车辆 agent、相机、雷达和 NX 服务处于同一可达网络。
 

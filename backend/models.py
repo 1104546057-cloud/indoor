@@ -102,6 +102,39 @@ class Room(Base):
 
     cabinets: Mapped[list['Cabinet']] = relationship(back_populates='room')
     points: Mapped[list['InspectionPoint']] = relationship(back_populates='room')
+    maps: Mapped[list['RoomMap']] = relationship(
+        back_populates='room', cascade='all, delete-orphan'
+    )
+
+
+class RoomMap(Base):
+    """电房SLAM地图版本；车端文件用于导航，服务器副本用于审计与预览。"""
+
+    __tablename__ = 'tb_room_map'
+    __table_args__ = (UniqueConstraint('room_id', 'version', name='uq_room_map_version'),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    map_code: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    room_id: Mapped[int] = mapped_column(ForeignKey('tb_room.id'), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    vehicle_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default='saved')
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    resolution: Mapped[float | None] = mapped_column(Float, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    origin_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    origin_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    yaml_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    pgm_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    preview_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    room: Mapped[Room] = relationship(back_populates='maps')
 
 
 class CabinetType(Base):
@@ -245,6 +278,7 @@ class InspectionPoint(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     point_code: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
     room_id: Mapped[int] = mapped_column(ForeignKey('tb_room.id'), index=True, nullable=False)
+    map_id: Mapped[int | None] = mapped_column(ForeignKey('tb_room_map.id'), index=True, nullable=True)
     cabinet_id: Mapped[int | None] = mapped_column(ForeignKey('tb_cabinet.id'), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     x: Mapped[float] = mapped_column(Float, nullable=False)
@@ -260,6 +294,7 @@ class InspectionPoint(Base):
 
     room: Mapped[Room] = relationship(back_populates='points')
     cabinet: Mapped[Cabinet | None] = relationship()
+    room_map: Mapped[RoomMap | None] = relationship()
 
 
 class Route(Base):
@@ -270,6 +305,7 @@ class Route(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     route_code: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
     room_id: Mapped[int] = mapped_column(ForeignKey('tb_room.id'), index=True, nullable=False)
+    map_id: Mapped[int | None] = mapped_column(ForeignKey('tb_room_map.id'), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -279,6 +315,7 @@ class Route(Base):
     )
 
     room: Mapped[Room] = relationship()
+    room_map: Mapped[RoomMap | None] = relationship()
     details: Mapped[list['RouteDetail']] = relationship(
         back_populates='route', cascade='all, delete-orphan', order_by='RouteDetail.sequence'
     )

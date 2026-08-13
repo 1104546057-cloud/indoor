@@ -1,0 +1,18 @@
+[Unit]
+Description=Indoor patrol ROS navigation and web control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nano1
+Environment=HOME=/home/nano1
+WorkingDirectory=/home/nano1
+ExecStart=/bin/bash -lc 'source /opt/ros/melodic/setup.bash && source /home/nano1/indoor_patrol_ws/devel/setup.bash && exec roslaunch indoor_patrol_bringup web_navigation_control.launch map_file:=/home/nano1/indoor_patrol_maps/active.yaml start_sensors:=true initial_pose_x:=0.0 initial_pose_y:=0.0 initial_pose_a:=0.0'
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
