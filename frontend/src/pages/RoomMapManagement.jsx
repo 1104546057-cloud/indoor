@@ -122,7 +122,7 @@ export default function RoomMapManagement() {
     setNotice('建图已启动，可以按住方向键低速扫描环境')
   })
 
-  const stopVehicle = useCallback(async () => {
+  const stopMotion = useCallback(async () => {
     if (!vehicleId) return
     await fetchJson(`/api/vehicle/stop?vehicle_id=${encodeURIComponent(vehicleId)}`, { method: 'POST' }).catch(() => {})
   }, [vehicleId])
@@ -134,8 +134,8 @@ export default function RoomMapManagement() {
 
   const clearCommand = useCallback(() => {
     clearCommandTimer()
-    stopVehicle()
-  }, [clearCommandTimer, stopVehicle])
+    stopMotion()
+  }, [clearCommandTimer, stopMotion])
 
   useEffect(() => () => clearCommand(), [clearCommand])
 
@@ -152,9 +152,18 @@ export default function RoomMapManagement() {
     commandTimerRef.current = window.setInterval(publish, 250)
   }
 
+  const stopMappingSession = () => run('stop', async () => {
+    clearCommandTimer()
+    const status = await fetchJson(`/api/business/rooms/${roomId}/mapping/stop`, jsonRequest('POST', { vehicle_id: vehicleId }))
+    setMapping(status)
+    setNotice('车辆已停车并保留当前地图，可以安全保存版本')
+  })
+
   const save = () => run('save', async () => {
     if (!saveForm.name.trim()) throw new Error('请填写地图名称')
-    await stopVehicle()
+    clearCommandTimer()
+    const stopped = await fetchJson(`/api/business/rooms/${roomId}/mapping/stop`, jsonRequest('POST', { vehicle_id: vehicleId }))
+    setMapping(stopped)
     const result = await fetchJson(`/api/business/rooms/${roomId}/mapping/save`, jsonRequest('POST', {
       vehicle_id: vehicleId,
       name: saveForm.name.trim(),
@@ -168,7 +177,7 @@ export default function RoomMapManagement() {
 
   const discard = () => run('discard', async () => {
     if (!window.confirm('确认放弃本次未保存的地图？车辆会立即保持停止。')) return
-    await stopVehicle()
+    clearCommandTimer()
     const status = await fetchJson(`/api/business/rooms/${roomId}/mapping/discard`, jsonRequest('POST', { vehicle_id: vehicleId }))
     setMapping(status)
     setNotice('本次建图已放弃')
@@ -215,7 +224,7 @@ export default function RoomMapManagement() {
       <div className="room-map-layout">
         <aside className="room-map-panel room-map-library"><div className="room-map-panel-title"><div><span>MAP LIBRARY</span><h2>地图版本库</h2></div><b>{maps.length} 个版本</b></div><div className="room-map-list">{maps.map((item) => <button type="button" key={item.id} className={selectedMap?.id === item.id ? 'selected' : ''} onClick={() => setSelectedMapId(item.id)}><img src={item.previewUrl} alt="" /><div><strong>{item.name}</strong><span>{item.mapCode}</span><small>V{item.version} · {formatDate(item.createdAt)}</small></div>{item.active ? <em>当前</em> : null}</button>)}{maps.length === 0 ? <div className="room-map-empty-list">尚无平台地图，可导入车端现有地图或开始一次新建图</div> : null}</div>{maps.length === 0 ? <button type="button" className="room-map-import" disabled={!selectedVehicle?.online || busy} onClick={importCurrent}>导入当前车端导航地图</button> : null}{selectedMap ? <div className="room-map-version-detail"><dl><div><dt>分辨率</dt><dd>{selectedMap.resolution || '--'} m/px</dd></div><div><dt>尺寸</dt><dd>{selectedMap.width || '--'} × {selectedMap.height || '--'}</dd></div><div><dt>建图车辆</dt><dd>{selectedMap.vehicleId}</dd></div><div><dt>原点</dt><dd>{selectedMap.origin?.slice(0, 2).map((value) => Number(value).toFixed(2)).join(', ')}</dd></div></dl><button type="button" disabled={selectedMap.active || busy} onClick={activate}>{selectedMap.active ? '当前导航地图' : '设为导航地图'}</button></div> : null}</aside>
 
-        <main className="room-map-panel room-map-workspace"><div className="room-map-panel-title"><div><span>LIVE MAPPING</span><h2>实时雷达建图</h2></div><label>执行机器人<select value={vehicleId} onChange={(event) => setVehicleId(event.target.value)}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name || vehicle.id} · {vehicle.online ? '在线' : '离线'}</option>)}</select></label></div><div className="room-map-live"><MapCanvas src={liveImage} metadata={mapping?.map} pose={mapping?.pose} /><div className="room-map-telemetry"><span>雷达<b>{mapping?.lidar_age == null ? '--' : `${mapping.lidar_age.toFixed(1)}s`}</b></span><span>里程计<b>{mapping?.odom_age == null ? '--' : `${mapping.odom_age.toFixed(1)}s`}</b></span><span>地图尺寸<b>{mapping?.map?.available ? `${mapping.map.width}×${mapping.map.height}` : '--'}</b></span><span>建图时长<b>{mapping?.elapsed_seconds == null ? '--' : `${Math.round(mapping.elapsed_seconds)}s`}</b></span></div></div><div className="room-map-actions"><button type="button" className="primary" disabled={!selectedVehicle?.online || busy || isMapping} onClick={start}>开始新地图</button><button type="button" disabled={!isMapping || busy} onClick={stopVehicle}>停车并保持建图</button><button type="button" className="danger" disabled={!isMapping || busy} onClick={discard}>放弃本次地图</button></div><div className="room-map-save"><input value={saveForm.name} onChange={(event) => setSaveForm((current) => ({ ...current, name: event.target.value }))} placeholder="地图名称，例如：实验楼一层完整图" /><input value={saveForm.description} onChange={(event) => setSaveForm((current) => ({ ...current, description: event.target.value }))} placeholder="版本说明（可选）" /><button type="button" disabled={!isMapping || busy} onClick={save}>{busy === 'save' ? '保存中…' : '保存地图版本'}</button></div></main>
+        <main className="room-map-panel room-map-workspace"><div className="room-map-panel-title"><div><span>LIVE MAPPING</span><h2>实时雷达建图</h2></div><label>执行机器人<select value={vehicleId} onChange={(event) => setVehicleId(event.target.value)}>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name || vehicle.id} · {vehicle.online ? '在线' : '离线'}</option>)}</select></label></div><div className="room-map-live"><MapCanvas src={liveImage} metadata={mapping?.map} pose={mapping?.pose} /><div className="room-map-telemetry"><span>雷达<b>{mapping?.lidar_age == null ? '--' : `${mapping.lidar_age.toFixed(1)}s`}</b></span><span>里程计<b>{mapping?.odom_age == null ? '--' : `${mapping.odom_age.toFixed(1)}s`}</b></span><span>地图尺寸<b>{mapping?.map?.available ? `${mapping.map.width}×${mapping.map.height}` : '--'}</b></span><span>建图时长<b>{mapping?.elapsed_seconds == null ? '--' : `${Math.round(mapping.elapsed_seconds)}s`}</b></span></div></div><div className="room-map-actions"><button type="button" className="primary" disabled={!selectedVehicle?.online || busy || isMapping} onClick={start}>开始新地图</button><button type="button" disabled={!isMapping || busy} onClick={stopMappingSession}>停车并保持建图</button><button type="button" className="danger" disabled={!isMapping || busy} onClick={discard}>放弃本次地图</button></div><div className="room-map-save"><input value={saveForm.name} onChange={(event) => setSaveForm((current) => ({ ...current, name: event.target.value }))} placeholder="地图名称，例如：实验楼一层完整图" /><input value={saveForm.description} onChange={(event) => setSaveForm((current) => ({ ...current, description: event.target.value }))} placeholder="版本说明（可选）" /><button type="button" disabled={!isMapping || busy} onClick={save}>{busy === 'save' ? '保存中…' : '保存地图版本'}</button></div></main>
 
         <aside className="room-map-panel room-map-control"><div className="room-map-panel-title"><div><span>SAFE CONTROL</span><h2>建图遥控</h2></div><b>低速模式</b></div><div className="room-map-dpad">{directions.map((direction) => <button key={direction.id} type="button" className={direction.id} disabled={!isMapping} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); beginDirection(direction) }} onPointerUp={clearCommand} onPointerCancel={clearCommand} onPointerLeave={clearCommand}><b>{direction.symbol}</b><span>{direction.label}</span></button>)}<button type="button" className="stop" onClick={clearCommand}>STOP</button></div><p>按住方向键持续发送低速命令，松开立即停车。切换页面或断开操作后，车端超时保护也会自动归零。</p><div className="room-map-safety"><span>线速度上限 <b>0.12 m/s</b></span><span>角速度上限 <b>0.25 rad/s</b></span></div></aside>
       </div>

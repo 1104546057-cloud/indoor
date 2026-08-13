@@ -165,6 +165,9 @@ def create_mapping_router(get_current_user: Callable) -> APIRouter:
     def persist_mapping(room_id: int, payload: SaveMapPayload, current_user=auth, db: Session = Depends(get_db)):
         require_permission(current_user, 'device_resources', 'create')
         room = _require_room(db, room_id)
+        stopped = stop_mapping(payload.vehicle_id)
+        if stopped.get('mode') != 'mapping_stopped':
+            raise HTTPException(status_code=409, detail='车辆未能安全停止建图，地图未保存')
         next_version = int(db.query(func.max(RoomMap.version)).filter(RoomMap.room_id == room_id).scalar() or 0) + 1
         map_code = f'room{room_id}_v{next_version}_{datetime.now():%Y%m%d%H%M%S}'
         metadata = save_mapping(payload.vehicle_id, map_code)

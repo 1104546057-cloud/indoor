@@ -766,7 +766,11 @@ def test_room_mapping_is_saved_versioned_and_activated(monkeypatch, tmp_path):
     assert start_response.status_code == 202
     assert started == ['nano1']
 
-    monkeypatch.setattr(mapping_router_module, 'save_mapping', lambda vehicle_id, map_id: {
+    save_sequence = []
+    monkeypatch.setattr(mapping_router_module, 'stop_mapping', lambda vehicle_id: save_sequence.append(('stop', vehicle_id)) or {
+        'mode': 'mapping_stopped',
+    })
+    monkeypatch.setattr(mapping_router_module, 'save_mapping', lambda vehicle_id, map_id: save_sequence.append(('save', vehicle_id)) or {
         'map_id': map_id,
         'resolution': 0.05,
         'width': 120,
@@ -792,9 +796,22 @@ def test_room_mapping_is_saved_versioned_and_activated(monkeypatch, tmp_path):
     assert map_record['roomId'] == room_id
     assert map_record['version'] == 1
     assert map_record['resolution'] == 0.05
+    assert save_sequence == [('stop', 'nano1'), ('save', 'nano1')]
     preview = client.get(map_record['previewUrl'])
     assert preview.status_code == 200
     assert preview.content.startswith(b'\x89PNG')
+
+    save_sequence.clear()
+    monkeypatch.setattr(mapping_router_module, 'stop_mapping', lambda vehicle_id: save_sequence.append(('stop', vehicle_id)) or {
+        'mode': 'mapping',
+    })
+    rejected_save = client.post(f'/api/business/rooms/{room_id}/mapping/save', json={
+        'vehicle_id': 'nano1',
+        'name': '不应保存的地图',
+    })
+    assert rejected_save.status_code == 409
+    assert rejected_save.json()['detail'] == '车辆未能安全停止建图，地图未保存'
+    assert save_sequence == [('stop', 'nano1')]
 
     monkeypatch.setattr(mapping_router_module, 'activate_vehicle_map', lambda vehicle_id, map_id: {
         'mode': 'navigation', 'vehicle_id': vehicle_id, 'active_map_id': map_id,
