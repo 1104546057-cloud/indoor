@@ -1190,11 +1190,12 @@ def vehicle_camera_stream(
     require_permission(current_user, 'patrol_monitor', 'view')
     # 浏览器可能拦截直接访问 Nano 私网 IP 的 MJPEG 图片流，因此这里转成同源代理流。
     source = open_camera_stream(vehicle_id, camera_role)
+    read_chunk = getattr(source, 'read1', source.read)
 
     def iter_stream():
         try:
             while True:
-                chunk = source.read(65536)
+                chunk = read_chunk(16384)
                 if not chunk:
                     break
                 yield chunk
@@ -1208,6 +1209,7 @@ def vehicle_camera_stream(
             'Cache-Control': 'no-store, no-cache, must-revalidate',
             'Pragma': 'no-cache',
             'Expires': '0',
+            'X-Accel-Buffering': 'no',
         },
     )
 
