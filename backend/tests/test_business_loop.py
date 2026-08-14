@@ -923,6 +923,14 @@ def test_navigation_route_requires_matching_active_map_and_localization(monkeypa
     assert accepted.status_code == 200
     assert len(dispatched) == 1
 
+    custom_plan = client.post('/api/vehicle/navigation-route', json={
+        'vehicle_id': 'nano1',
+        'map_id': map_id,
+        'goals': [{'frame_id': 'map', 'x': 1.5, 'y': 2.5, 'yaw': 0.3}],
+    })
+    assert custom_plan.status_code == 200
+    assert len(dispatched) == 2
+
 
 def test_current_vehicle_map_can_be_imported_into_room(monkeypatch, tmp_path):
     room = client.post('/api/business/rooms', json={

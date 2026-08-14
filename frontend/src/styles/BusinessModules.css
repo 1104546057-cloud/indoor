@@ -230,11 +230,31 @@
 .real-plan-map-card .slam-resource-map { height: 570px; }
 .real-plan-map-card .business-panel-title b.online { color: #68edc0; }
 .real-plan-map-card .business-panel-title b.offline { color: #ffad80; }
-.real-plan-fields { display: grid; align-content: start; gap: 14px; }
+.real-plan-fields { max-height: 660px; display: grid; align-content: start; gap: 14px; overflow: auto; }
 .real-plan-fields label { display: grid; gap: 7px; color: #88c5cf; font-size: 12px; }
 .real-plan-fields input,
 .real-plan-fields select { min-width: 0; height: 42px; padding: 0 11px; color: #ecfdff; border: 1px solid rgba(158, 223, 234, .25); background: rgba(3, 27, 40, .9); }
 .real-plan-fields .business-primary { min-height: 44px; }
+.real-plan-point-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.real-plan-point-mode button { min-height: 38px; color: #8abec8; border: 1px solid rgba(158, 223, 234, .2); background: rgba(3, 30, 43, .7); }
+.real-plan-point-mode button.active { color: #eaffff; border-color: rgba(61, 237, 204, .58); background: rgba(11, 105, 111, .58); box-shadow: inset 0 0 18px rgba(30, 220, 196, .08); }
+.real-plan-point-mode button:disabled { opacity: .38; cursor: not-allowed; }
+.real-plan-point-head { display: flex; align-items: center; justify-content: space-between; color: #8ecbd4; font-size: 12px; }
+.real-plan-point-head b { color: #62edd1; }
+.real-plan-point-list { max-height: 270px; display: grid; gap: 7px; overflow: auto; }
+.real-plan-point-empty { min-height: 82px; display: grid; place-items: center; color: #709da6; border: 1px dashed rgba(158, 223, 234, .22); }
+.real-plan-point-item { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; border: 1px solid rgba(158, 223, 234, .16); background: rgba(5, 43, 57, .62); }
+.real-plan-point-item > b { display: grid; place-items: center; width: 28px; height: 28px; color: #55ebce; border: 1px solid rgba(74, 231, 209, .34); }
+.real-plan-point-item > div { min-width: 0; display: grid; grid-template-columns: minmax(110px, 1fr) auto; align-items: center; gap: 5px 8px; }
+.real-plan-point-item > div > input { height: 32px; }
+.real-plan-point-item small { grid-column: 1 / -1; color: #75aab5; font: 10px "Courier New", monospace; }
+.real-plan-point-item > div > label { display: flex; align-items: center; gap: 5px; color: #7db6c1; }
+.real-plan-point-item > div > label input { width: 82px; height: 32px; }
+.real-plan-point-item nav { display: grid; grid-template-columns: repeat(2, 30px); gap: 4px; }
+.real-plan-point-item nav button { min-height: 26px; padding: 0; color: #bcebf0; border: 1px solid rgba(158, 223, 234, .22); background: rgba(7, 56, 71, .78); }
+.real-plan-point-item nav button.danger { grid-column: 1 / -1; color: #ff9baa; border-color: rgba(255, 104, 124, .35); }
+.real-plan-point-item nav button:disabled { opacity: .3; }
+.resource-optional-notice { padding: 8px 10px; color: #8ed6df; border-left: 3px solid #46d7c0; background: rgba(24, 99, 96, .18); font-size: 11px; }
 .real-plan-confirm > section:first-child { overflow: auto; }
 .real-plan-confirm h3 { margin: 8px 0; color: #ecfdff; font-size: 22px; }
 .real-plan-confirm p { color: #88bdc7; }

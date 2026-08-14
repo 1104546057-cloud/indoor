@@ -2068,8 +2068,11 @@ function ClusterControl() {
   }
 
   const sendTaskNavigationRoute = async (task) => {
-    if (!task.mapId || !task.routeDatabaseId) {
-      throw new Error('该旧任务没有绑定真实地图和正式路线，请重新新建计划后再启动')
+    if (!task.mapId) {
+      throw new Error('该旧任务没有绑定真实地图版本，请重新新建计划后再启动')
+    }
+    if (!task.routePoints?.length) {
+      throw new Error('该任务没有可执行的地图坐标点，请编辑计划后再启动')
     }
     const sourceGoals = (task.routePoints || []).map((point) => ({
       frame_id: 'map',
