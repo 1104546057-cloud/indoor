@@ -1,13 +1,13 @@
 /* eslint-disable react/prop-types */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import LabBuilding3DPreview from '../components/LabBuilding3DPreview'
+import RealPatrolPlanModal from '../components/RealPatrolPlanModal'
 import RouteManagementPanel from '../components/RouteManagementPanel'
 import useBusinessOverview from '../hooks/useBusinessOverview'
 import { hanlinRoomMap, inspectionPointById } from '../data/hanlinRoomMap'
 import { labBuildingMap, labInspectionPointById } from '../data/labBuildingMap'
 import { getInspectionResults, subscribeInspectionResults, updateInspectionResultReview } from '../utils/inspectionResults'
-import { buildNavigationGoals, buildNavigationGoalsFromPoints, isPointInsideSlamCoverage } from '../utils/navigationCoordinates'
+import { isPointInsideSlamCoverage } from '../utils/navigationCoordinates'
 import {
   buildPatrolMonitorUrl,
   getNavigationExecutionId,
@@ -60,6 +60,23 @@ const LIVE_NAVIGATION_LABELS = {
   cancelled: '已停止',
 }
 
+const EMPTY_TASK = {
+  id: '',
+  sceneId: '',
+  name: '尚无真实巡检任务',
+  area: '--',
+  robot: '--',
+  start: '--',
+  status: '待执行',
+  progress: 0,
+  priority: '--',
+  pointIds: [],
+  routePoints: [],
+  detail: { pointTotal: 0, currentPoint: 0, eta: '--', abnormalCount: 0 },
+  timeline: [],
+  aiPreview: [],
+}
+
 function getSceneMap(sceneId = 'power-room') {
   return sceneMaps[sceneId] || hanlinRoomMap
 }
@@ -109,155 +126,9 @@ function readVehiclePose(status, mapData) {
   return modelPoint ? { ...pose, modelPoint } : null
 }
 
-const initialTasks = [
-  {
-    id: 'task-a1',
-    name: 'A1通道巡检',
-    area: 'A区 / 通道A1',
-    robot: 'nano1',
-    start: '2026-06-17 08:30',
-    status: '执行中',
-    progress: 65,
-    detail: { pointTotal: 8, currentPoint: 5, eta: '09:20', abnormalCount: 1 },
-    timeline: [
-      { time: '08:30', label: '创建任务', type: 'DOC', state: 'done' },
-      { time: '08:35', label: '机器人启动', type: 'GO', state: 'done' },
-      { time: '08:42', label: '到达巡检点', type: 'POS', state: 'done' },
-      { time: '08:45', label: '完成表计识别', type: 'AI', state: 'done' },
-      { time: '08:53', label: '上传识别结果', type: 'UP', state: 'active' },
-      { time: '09:10', label: '巡检完成', type: 'END', state: 'pending' },
-    ],
-    aiPreview: [
-      { title: '电压表识别', value: '380 V', confidence: '97.3%', time: '08:45:12', status: '正常', visual: 'meter' },
-      { title: '电流表识别', value: '36.2 A', confidence: '96.8%', time: '08:45:18', status: '正常', visual: 'meter' },
-      { title: '温度表识别', value: '65.4 C', confidence: '94.1%', time: '08:45:25', status: '告警', visual: 'digital' },
-    ],
-  },
-  {
-    id: 'task-b2',
-    name: 'B2机房巡检',
-    area: 'B区 / 机房B2',
-    robot: 'nano2',
-    start: '2026-06-17 10:00',
-    status: '待执行',
-    progress: 0,
-    detail: { pointTotal: 6, currentPoint: 0, eta: '10:35', abnormalCount: 0 },
-    timeline: [
-      { time: '10:00', label: '等待任务启动', type: 'WAIT', state: 'pending' },
-      { time: '--:--', label: '机器人启动', type: 'GO', state: 'pending' },
-      { time: '--:--', label: '到达机房入口', type: 'POS', state: 'pending' },
-      { time: '--:--', label: '完成柜体识别', type: 'AI', state: 'pending' },
-      { time: '--:--', label: '上传识别结果', type: 'UP', state: 'pending' },
-      { time: '--:--', label: '巡检完成', type: 'END', state: 'pending' },
-    ],
-    aiPreview: [
-      { title: '等待采集', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-      { title: '等待识别', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-      { title: '等待复核', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-    ],
-  },
-  {
-    id: 'task-c1',
-    name: 'C1水泵房巡检',
-    area: 'C区 / 水泵房C1',
-    robot: 'nano3',
-    start: '2026-06-17 14:00',
-    status: '待执行',
-    progress: 0,
-    detail: { pointTotal: 6, currentPoint: 0, eta: '14:40', abnormalCount: 0 },
-    timeline: [
-      { time: '14:00', label: '等待任务启动', type: 'WAIT', state: 'pending' },
-      { time: '--:--', label: '机器人启动', type: 'GO', state: 'pending' },
-      { time: '--:--', label: '到达水泵房', type: 'POS', state: 'pending' },
-      { time: '--:--', label: '完成温度识别', type: 'AI', state: 'pending' },
-      { time: '--:--', label: '上传识别结果', type: 'UP', state: 'pending' },
-      { time: '--:--', label: '巡检完成', type: 'END', state: 'pending' },
-    ],
-    aiPreview: [
-      { title: '泵体温度', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-      { title: '压力表识别', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'meter' },
-      { title: '液位状态', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-    ],
-  },
-  {
-    id: 'task-power',
-    name: '配电房日常巡检',
-    area: 'A区 / 配电房',
-    robot: 'nano1',
-    start: '2026-06-17 15:30',
-    status: '已完成',
-    progress: 100,
-    detail: { pointTotal: 10, currentPoint: 10, eta: '16:18', abnormalCount: 0 },
-    timeline: [
-      { time: '15:30', label: '创建任务', type: 'DOC', state: 'done' },
-      { time: '15:34', label: '机器人启动', type: 'GO', state: 'done' },
-      { time: '15:42', label: '到达配电房', type: 'POS', state: 'done' },
-      { time: '15:58', label: '完成柜体识别', type: 'AI', state: 'done' },
-      { time: '16:12', label: '上传识别结果', type: 'UP', state: 'done' },
-      { time: '16:18', label: '巡检完成', type: 'END', state: 'done' },
-    ],
-    aiPreview: [
-      { title: '柜门状态', value: '关闭', confidence: '98.5%', time: '15:58:11', status: '正常', visual: 'digital' },
-      { title: '电压表识别', value: '381 V', confidence: '97.9%', time: '16:02:25', status: '正常', visual: 'meter' },
-      { title: '指示灯识别', value: '绿色', confidence: '96.4%', time: '16:08:03', status: '正常', visual: 'digital' },
-    ],
-  },
-  {
-    id: 'task-b1-night',
-    name: 'B1通道夜间巡检',
-    area: 'B区 / 通道B1',
-    robot: 'nano2',
-    start: '2026-06-16 23:00',
-    status: '异常',
-    progress: 80,
-    detail: { pointTotal: 8, currentPoint: 6, eta: '待复核', abnormalCount: 2 },
-    timeline: [
-      { time: '23:00', label: '创建任务', type: 'DOC', state: 'done' },
-      { time: '23:04', label: '机器人启动', type: 'GO', state: 'done' },
-      { time: '23:18', label: '到达巡检点', type: 'POS', state: 'done' },
-      { time: '23:21', label: '温度识别异常', type: 'AI', state: 'alarm' },
-      { time: '23:24', label: '等待人工复核', type: 'RV', state: 'active' },
-      { time: '--:--', label: '巡检完成', type: 'END', state: 'pending' },
-    ],
-    aiPreview: [
-      { title: '温度表识别', value: '72.8 C', confidence: '95.2%', time: '23:21:08', status: '告警', visual: 'digital' },
-      { title: '电流表识别', value: '41.6 A', confidence: '93.6%', time: '23:21:16', status: '告警', visual: 'meter' },
-      { title: '开关状态', value: '合闸', confidence: '96.1%', time: '23:22:03', status: '正常', visual: 'digital' },
-    ],
-  },
-].map((task) => ({ ...task, source: 'demo' }))
-
-const wholeRoomScope = {
-  id: 'whole-room',
-  name: '整房巡检范围',
-  area: `${hanlinRoomMap.name} / 整房巡检`,
-  robot: 'nano1',
-  priority: '高',
-}
-
-const PLAN_PRIORITY_OPTIONS = ['低', '中', '高', '紧急']
 const taskColumns = ['任务名称', '区域', '机器人', '开始时间', '状态', '进度', '操作']
 const aiColumns = ['识别对象', '任务 / 点位', '识别值', '标准范围', '置信度', '状态', '复核', '操作']
 const reportColumns = ['报告编号', '巡检任务', '巡检时间', '点位', '异常', '复核', '报告状态', '操作']
-
-function getAreaPointIds(sceneId = 'power-room') {
-  return getSceneMap(sceneId).inspectionPoints.map((point) => point.id)
-}
-
-function getNavigablePointIds(sceneId = 'power-room') {
-  const mapData = getSceneMap(sceneId)
-  if (!mapData.slamMap) {
-    return getAreaPointIds(sceneId)
-  }
-
-  return mapData.inspectionPoints
-    .filter((point) => isPointInsideSlamCoverage(point, mapData))
-    .map((point) => point.id)
-}
-
-function getEstimatedMinutes(pointCount) {
-  return Math.max(12, 8 + pointCount * 2)
-}
 
 function normalizeArrivalDirection(direction) {
   if (ARRIVAL_DIRECTION_VALUES.has(direction)) {
@@ -288,109 +159,6 @@ function getPlanPointDirection(point, pointDirections = {}) {
   return normalizeArrivalDirection(pointDirections[point?.id] ?? point?.direction ?? point?.yaw)
 }
 
-function getPlanRoutePoints(form) {
-  if (form.sceneId === 'lab-building') {
-    return (form.routePoints || []).map((point) => {
-      const direction = getPlanPointDirection(point, form.pointDirections)
-      return { ...point, direction, yaw: direction }
-    })
-  }
-
-  const selectedPointIds = form.selectedPointIds || []
-
-  return selectedPointIds
-    .map((pointId) => allInspectionPointById[pointId])
-    .filter(Boolean)
-    .map((point) => {
-      const direction = getPlanPointDirection(point, form.pointDirections)
-      return { ...point, direction, yaw: direction }
-    })
-}
-
-function getPresetPlanRoutePoints(sceneId) {
-  return getNavigablePointIds(sceneId)
-    .map((pointId) => allInspectionPointById[pointId])
-    .filter(Boolean)
-    .map((point) => {
-      const direction = getPlanPointDirection(point)
-      return { ...point, direction, yaw: direction }
-    })
-}
-
-const defaultLabRoutePoints = getPresetPlanRoutePoints('lab-building')
-
-function getCurrentPlanSchedule(now = new Date()) {
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  const hour = String(now.getHours()).padStart(2, '0')
-  const minute = String(now.getMinutes()).padStart(2, '0')
-
-  return {
-    startDate: `${year}-${month}-${day}`,
-    startTime: `${hour}:${minute}`,
-  }
-}
-
-const defaultPlanForm = {
-  name: '实验楼一层环廊巡检任务',
-  sceneId: 'lab-building',
-  roomId: labBuildingMap.id,
-  areaId: wholeRoomScope.id,
-  area: `${labBuildingMap.name} / 环形走廊`,
-  robot: wholeRoomScope.robot,
-  ...getCurrentPlanSchedule(),
-  selectedPointIds: defaultLabRoutePoints.map((point) => point.id),
-  routePoints: defaultLabRoutePoints,
-  pointDirections: {},
-  priority: wholeRoomScope.priority,
-}
-
-function getWaitingAiPreview() {
-  return [
-    { title: '等待采集', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-    { title: '等待识别', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-    { title: '等待复核', value: '--', confidence: '--', time: '--:--:--', status: '待执行', visual: 'digital' },
-  ]
-}
-
-function createTaskFromForm(form) {
-  const routePoints = getPlanRoutePoints(form)
-  const selectedPointIds = routePoints.map((point) => point.id)
-  const pointTotal = routePoints.length
-  const duration = getEstimatedMinutes(pointTotal)
-  const start = `${form.startDate} ${form.startTime}`
-  const [hour, minute] = form.startTime.split(':').map(Number)
-  const etaDate = new Date(2026, 0, 1, hour || 0, (minute || 0) + duration)
-  const eta = `${String(etaDate.getHours()).padStart(2, '0')}:${String(etaDate.getMinutes()).padStart(2, '0')}`
-  const taskId = `task-new-${Date.now()}`
-
-  return {
-    id: taskId,
-    sceneId: form.sceneId,
-    name: form.name.trim() || '新增巡检计划',
-    area: form.area,
-    robot: form.robot,
-    routeId: form.routeId || `custom-${form.areaId}`,
-    pointIds: selectedPointIds,
-    routePoints,
-    start,
-    status: '待执行',
-    progress: 0,
-    priority: form.priority,
-    detail: { pointTotal, currentPoint: 0, eta, abnormalCount: 0 },
-    timeline: [
-      { time: form.startTime, label: '等待任务启动', type: 'WAIT', state: 'pending' },
-      { time: '--:--', label: '机器人启动', type: 'GO', state: 'pending' },
-      { time: '--:--', label: `到达${routePoints[0]?.targetName || '首个巡检点'}`, type: 'POS', state: 'pending' },
-      { time: '--:--', label: '完成 AI 识别', type: 'AI', state: 'pending' },
-      { time: '--:--', label: '上传识别结果', type: 'UP', state: 'pending' },
-      { time: '--:--', label: '巡检完成', type: 'END', state: 'pending' },
-    ],
-    aiPreview: getWaitingAiPreview(),
-  }
-}
-
 async function fetchSavedTasks() {
   const response = await fetch('/api/tasks', { credentials: 'include' })
   if (!response.ok) {
@@ -398,34 +166,6 @@ async function fetchSavedTasks() {
   }
   const data = await response.json()
   return Array.isArray(data.tasks) ? data.tasks : []
-}
-
-async function saveTask(task) {
-  const response = await fetch('/api/tasks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(task),
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(data.detail || 'task save failed')
-  }
-  return data.task || task
-}
-
-async function updateSavedTask(task) {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(task),
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(data.detail || 'task update failed')
-  }
-  return data.task || task
 }
 
 async function deleteSavedTask(taskId) {
@@ -438,68 +178,6 @@ async function deleteSavedTask(taskId) {
     throw new Error(data.detail || 'task delete failed')
   }
   return data
-}
-
-function getAreaForm(area = wholeRoomScope) {
-  const selectedPointIds = area.pointIds || getAreaPointIds()
-
-  return {
-    name: area.name.includes('任务') ? area.name : `${hanlinRoomMap.name}整房巡检任务`,
-    sceneId: 'power-room',
-    roomId: hanlinRoomMap.id,
-    areaId: wholeRoomScope.id,
-    area: wholeRoomScope.area,
-    robot: area.robot,
-    startDate: defaultPlanForm.startDate,
-    startTime: defaultPlanForm.startTime,
-    selectedPointIds,
-    routePoints: [],
-    pointDirections: {},
-    priority: area.priority,
-  }
-}
-
-function getTaskPlanForm(task) {
-  const sceneId = task.sceneId || 'lab-building'
-  const mapData = getSceneMap(sceneId)
-  const fallbackCount = task.detail?.pointTotal || mapData.inspectionPoints.length
-  const sourcePoints = task.routePoints?.length
-    ? task.routePoints
-    : task.pointIds?.length
-      ? task.pointIds.map((pointId) => allInspectionPointById[pointId]).filter(Boolean)
-      : mapData.inspectionPoints.slice(0, fallbackCount)
-  const routePoints = sourcePoints.map((point, index) => {
-    const pointId = point.id || point.pointId || `${sceneId}-edit-${index + 1}`
-    const direction = getPlanPointDirection(point)
-    return {
-      ...point,
-      id: pointId,
-      name: point.name || point.pointName || point.targetName || `巡检点${index + 1}`,
-      targetName: point.targetName || point.name || point.pointName || `巡检点${index + 1}`,
-      direction,
-      yaw: direction,
-    }
-  })
-  const [startDate = '', rawStartTime = ''] = String(task.start || '').split(' ')
-  const schedule = getCurrentPlanSchedule()
-
-  return {
-    name: task.name || '未命名巡检任务',
-    sceneId,
-    roomId: mapData.id,
-    areaId: task.routeId?.replace(/^custom-/, '') || wholeRoomScope.id,
-    area: task.area || `${mapData.name} / 环形走廊`,
-    robot: task.robot || wholeRoomScope.robot,
-    routeId: task.routeId || `custom-${wholeRoomScope.id}`,
-    startDate: startDate || schedule.startDate,
-    startTime: rawStartTime.slice(0, 5) || schedule.startTime,
-    selectedPointIds: routePoints.map((point) => point.id),
-    routePoints,
-    pointDirections: Object.fromEntries(
-      routePoints.map((point) => [point.id, getPlanPointDirection(point)]),
-    ),
-    priority: task.priority || wholeRoomScope.priority,
-  }
 }
 
 function getTaskStats(taskList) {
@@ -2012,54 +1690,23 @@ function ClusterControl() {
   const navigate = useNavigate()
   const {
     business,
+    vehicles,
     loading: archiveLoading,
     error: archiveError,
     reload: reloadArchive,
-  } = useBusinessOverview({ pollMs: 10000 })
+  } = useBusinessOverview({ pollMs: 10000, includeVehicles: true })
   const [activeTab, setActiveTab] = useState('plan')
-  const [taskList, setTaskList] = useState(initialTasks)
-  const [selectedTaskId, setSelectedTaskId] = useState(initialTasks[0].id)
+  const [taskList, setTaskList] = useState([])
+  const [selectedTaskId, setSelectedTaskId] = useState(null)
   const [detailTaskId, setDetailTaskId] = useState(null)
   const [actionNotice, setActionNotice] = useState('点击任务行查看执行详情，或使用右侧操作推进任务状态。')
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState(null)
-  const [planForm, setPlanForm] = useState(() => ({
-    ...defaultPlanForm,
-    ...getCurrentPlanSchedule(),
-  }))
-  const [planStep, setPlanStep] = useState(1)
-  const [showSlamMap, setShowSlamMap] = useState(false)
   const [storedResults, setStoredResults] = useState(() => getInspectionResults())
   const [taskMonitorTelemetry, setTaskMonitorTelemetry] = useState(null)
   const terminalExecutionRef = useRef(new Set())
   const [taskCameraAvailable, setTaskCameraAvailable] = useState(true)
   const [taskCameraRetryNonce, setTaskCameraRetryNonce] = useState(0)
-  const activePlanMap = getSceneMap(planForm.sceneId)
-  const activePlanRoutePoints = getPlanRoutePoints(planForm)
-
-  useEffect(() => {
-    if (
-      planForm.sceneId !== 'lab-building'
-      || (planForm.routePoints?.length || 0) > 0
-      || (planForm.selectedPointIds?.length || 0) === 0
-    ) {
-      return
-    }
-
-    // 兼容热更新前已经打开的表单：旧状态只有 selectedPointIds，
-    // 左侧会显示预设点，但右侧 routePoints 仍为空。
-    const presetRoutePoints = getPresetPlanRoutePoints('lab-building')
-    const presetPointIds = new Set(presetRoutePoints.map((point) => point.id))
-    if (!planForm.selectedPointIds.every((pointId) => presetPointIds.has(pointId))) {
-      return
-    }
-
-    setPlanForm((currentForm) => ({
-      ...currentForm,
-      routePoints: presetRoutePoints.filter((point) => currentForm.selectedPointIds.includes(point.id)),
-    }))
-  }, [planForm.routePoints, planForm.sceneId, planForm.selectedPointIds])
-
   useEffect(() => {
     let cancelled = false
 
@@ -2090,7 +1737,7 @@ function ClusterControl() {
   )
   const statCards = useMemo(() => getTaskStats(taskList), [taskList])
   const selectedTask = useMemo(
-    () => taskList.find((task) => task.id === selectedTaskId) || taskList[0],
+    () => taskList.find((task) => task.id === selectedTaskId) || taskList[0] || EMPTY_TASK,
     [selectedTaskId, taskList],
   )
   const detailTask = useMemo(
@@ -2400,28 +2047,10 @@ function ClusterControl() {
   const closePlanModal = () => {
     setIsPlanModalOpen(false)
     setEditingTaskId(null)
-    setPlanStep(1)
-    setShowSlamMap(false)
   }
 
-  const openPlanModal = (areaTemplate) => {
-    const currentSchedule = getCurrentPlanSchedule()
+  const openPlanModal = () => {
     setEditingTaskId(null)
-
-    if (areaTemplate) {
-      setPlanForm({
-        ...getAreaForm(areaTemplate),
-        ...currentSchedule,
-      })
-    } else {
-      setPlanForm({
-        ...defaultPlanForm,
-        ...currentSchedule,
-      })
-    }
-
-    setPlanStep(1)
-    setShowSlamMap(false)
     setIsPlanModalOpen(true)
   }
 
@@ -2435,212 +2064,22 @@ function ClusterControl() {
     setSelectedTaskId(task.id)
     setDetailTaskId(null)
     setEditingTaskId(task.id)
-    setPlanForm(getTaskPlanForm(task))
-    setPlanStep(1)
-    setShowSlamMap(false)
     setIsPlanModalOpen(true)
   }
 
-  const updatePlanForm = (field, value) => {
-    setPlanForm((currentForm) => ({
-      ...currentForm,
-      [field]: value,
-    }))
-  }
-
-  const changePlanScene = (sceneId) => {
-    const mapData = getSceneMap(sceneId)
-    const isLabScene = sceneId === 'lab-building'
-    const presetRoutePoints = isLabScene ? getPresetPlanRoutePoints(sceneId) : []
-
-    setPlanForm((currentForm) => ({
-      ...currentForm,
-      sceneId,
-      roomId: mapData.id,
-      areaId: wholeRoomScope.id,
-      area: isLabScene ? `${mapData.name} / 环形走廊` : `${mapData.name} / 整房巡检`,
-      name: isLabScene ? `${mapData.name}环廊巡检任务` : `${mapData.name}整房巡检任务`,
-      selectedPointIds: isLabScene
-        ? presetRoutePoints.map((point) => point.id)
-        : getNavigablePointIds(sceneId),
-      routePoints: presetRoutePoints,
-      pointDirections: {},
-    }))
-  }
-
-  const togglePlanPoint = (pointId) => {
-    setPlanForm((currentForm) => {
-      const hasPoint = currentForm.selectedPointIds.includes(pointId)
-      return {
-        ...currentForm,
-        selectedPointIds: hasPoint
-          ? currentForm.selectedPointIds.filter((item) => item !== pointId)
-          : [...currentForm.selectedPointIds, pointId],
-      }
-    })
-  }
-
-  const movePlanPoint = (pointId, direction) => {
-    setPlanForm((currentForm) => {
-      const index = currentForm.selectedPointIds.indexOf(pointId)
-      const nextIndex = index + direction
-      if (index < 0 || nextIndex < 0 || nextIndex >= currentForm.selectedPointIds.length) {
-        return currentForm
-      }
-
-      const selectedPointIds = [...currentForm.selectedPointIds]
-      const [point] = selectedPointIds.splice(index, 1)
-      selectedPointIds.splice(nextIndex, 0, point)
-      return { ...currentForm, selectedPointIds }
-    })
-  }
-
-  const addFreeRoutePoint = (coords) => {
-    setPlanForm((currentForm) => {
-      const nextIndex = (currentForm.routePoints?.length || 0) + 1
-      const point = {
-        id: `LAB-FREE-${String(nextIndex).padStart(3, '0')}-${Date.now()}`,
-        name: `自由点${nextIndex}`,
-        targetName: `自由点${nextIndex}`,
-        x: Math.round(coords.x),
-        y: Math.round(coords.y),
-        direction: 'east',
-        yaw: 'east',
-        recognitionTargets: ['导航点'],
-        temporary: true,
-      }
-
-      return {
-        ...currentForm,
-        selectedPointIds: [...(currentForm.selectedPointIds || []), point.id],
-        routePoints: [...(currentForm.routePoints || []), point],
-      }
-    })
-  }
-
-  const removeFreeRoutePoint = (pointId) => {
-    setPlanForm((currentForm) => ({
-      ...currentForm,
-      selectedPointIds: (currentForm.selectedPointIds || []).filter((item) => item !== pointId),
-      routePoints: (currentForm.routePoints || []).filter((point) => point.id !== pointId),
-    }))
-  }
-
-  const clearPlanRoute = () => {
-    setPlanForm((currentForm) => ({
-      ...currentForm,
-      selectedPointIds: [],
-      routePoints: [],
-      pointDirections: {},
-    }))
-  }
-
-  const updatePlanPointDirection = (pointId, direction) => {
-    const normalizedDirection = normalizeArrivalDirection(direction)
-    setPlanForm((currentForm) => ({
-      ...currentForm,
-      pointDirections: {
-        ...(currentForm.pointDirections || {}),
-        [pointId]: normalizedDirection,
-      },
-      routePoints: (currentForm.routePoints || []).map((point) => (
-        point.id === pointId
-          ? { ...point, direction: normalizedDirection, yaw: normalizedDirection }
-          : point
-      )),
-    }))
-  }
-
-  const moveFreeRoutePoint = (pointId, direction) => {
-    setPlanForm((currentForm) => {
-      const routePoints = [...(currentForm.routePoints || [])]
-      const index = routePoints.findIndex((point) => point.id === pointId)
-      const nextIndex = index + direction
-      if (index < 0 || nextIndex < 0 || nextIndex >= routePoints.length) {
-        return currentForm
-      }
-
-      const [point] = routePoints.splice(index, 1)
-      routePoints.splice(nextIndex, 0, point)
-      return {
-        ...currentForm,
-        selectedPointIds: routePoints.map((item) => item.id),
-        routePoints,
-      }
-    })
-  }
-
-  const reversePlanRoute = () => {
-    setPlanForm((currentForm) => ({
-      ...currentForm,
-      selectedPointIds: [...currentForm.selectedPointIds].reverse(),
-      routePoints: [...(currentForm.routePoints || [])].reverse(),
-    }))
-  }
-
-  const handleCreatePlan = async (event) => {
-    event.preventDefault()
-    const selectedCount = activePlanRoutePoints.length
-    if (selectedCount === 0) {
-      setActionNotice(`请至少选择 1 个巡检点后再${editingTaskId ? '保存任务' : '创建任务'}。`)
-      setPlanStep(2)
-      return
-    }
-
-    const originalTask = editingTaskId
-      ? taskList.find((task) => task.id === editingTaskId)
-      : null
-    if (editingTaskId && (!originalTask || originalTask.status !== '待执行' || Number(originalTask.progress || 0) > 0)) {
-      setActionNotice('任务状态已经变化，当前任务不能继续编辑。')
-      closePlanModal()
-      return
-    }
-
-    const generatedTask = createTaskFromForm(planForm)
-    const newTask = originalTask
-      ? {
-          ...originalTask,
-          ...generatedTask,
-          id: originalTask.id,
-          source: originalTask.source,
-        }
-      : generatedTask
-    let savedTask
-
-    try {
-      if (originalTask) {
-        savedTask = originalTask.source === 'demo'
-          ? newTask
-          : { ...newTask, ...await updateSavedTask(newTask) }
-      } else {
-        savedTask = await saveTask(newTask)
-      }
-    } catch (error) {
-      console.error(originalTask ? 'update task failed' : 'save task failed', error)
-      setActionNotice(`任务${originalTask ? '更新' : '保存'}失败：${error.message}`)
-      return
-    }
-
-    setTaskList((currentTasks) => (
-      originalTask
-        ? currentTasks.map((task) => (task.id === savedTask.id ? savedTask : task))
-        : [savedTask, ...currentTasks.filter((task) => task.id !== savedTask.id)]
-    ))
-    setSelectedTaskId(savedTask.id)
-    setActiveTab('plan')
-    closePlanModal()
-    setActionNotice(
-      originalTask
-        ? `${savedTask.name} 已保存修改，任务 ID 保持不变。`
-        : `${newTask.name} 已创建，状态为待执行，可直接点击“开始”。`,
-    )
-  }
-
   const sendTaskNavigationRoute = async (task) => {
-    const mapData = getSceneMap(task.sceneId)
-    const sourceGoals = task.routePoints?.length
-      ? buildNavigationGoalsFromPoints(task.routePoints, mapData)
-      : buildNavigationGoals(task.pointIds || [], mapData)
+    if (!task.mapId || !task.routeDatabaseId) {
+      throw new Error('该旧任务没有绑定真实地图和正式路线，请重新新建计划后再启动')
+    }
+    const sourceGoals = (task.routePoints || []).map((point) => ({
+      frame_id: 'map',
+      x: Number(point.x),
+      y: Number(point.y),
+      yaw: Number(point.yaw || 0),
+      point_id: point.pointId || point.id,
+      point_name: point.pointName || point.name || point.targetName,
+      source: { room_id: task.roomId, map_id: task.mapId, route_id: task.routeDatabaseId },
+    }))
     const goals = sourceGoals.map((goal) => ({
       ...goal,
       task_id: task.id,
@@ -2657,6 +2096,8 @@ function ClusterControl() {
       body: JSON.stringify({
         vehicle_id: task.robot,
         task_id: task.id,
+        map_id: task.mapId || null,
+        route_id: task.routeDatabaseId || null,
         speed: NAVIGATION_SPEED,
         goals,
       }),
@@ -3403,271 +2844,22 @@ function ClusterControl() {
       )}
 
       {isPlanModalOpen && (
-        <div className="task-modal-backdrop" role="presentation">
-          <section className="task-plan-modal" role="dialog" aria-modal="true" aria-labelledby="plan-modal-title">
-            <div className="modal-heading">
-              <div>
-                <span className="task-kicker">{editingTaskId ? 'EDIT PATROL TASK' : 'CREATE PATROL PLAN'}</span>
-                <h2 id="plan-modal-title">{editingTaskId ? '编辑待执行任务' : '新建巡检计划'}</h2>
-              </div>
-              <button type="button" className="modal-close" aria-label="关闭任务表单" onClick={closePlanModal}>×</button>
-            </div>
-
-            <form className="plan-form" onSubmit={handleCreatePlan}>
-              <div className="plan-stepper">
-                {['巡检范围', '点位与路线'].map((label, index) => (
-                  <button
-                    type="button"
-                    className={planStep === index + 1 ? 'active' : ''}
-                    key={label}
-                    onClick={() => setPlanStep(index + 1)}
-                  >
-                    <span>{index + 1}</span>{label}
-                  </button>
-                ))}
-              </div>
-
-              {planStep === 1 && (
-                <div className="plan-step-panel scope-step">
-                  <div className="scene-selector" role="group" aria-label="巡检场景">
-                    <button
-                      type="button"
-                      className={planForm.sceneId === 'lab-building' ? 'active' : ''}
-                      onClick={() => changePlanScene('lab-building')}
-                    >
-                      <span>实验楼一</span>
-                      <small>导航联调场景 / 4.05m 走廊基准</small>
-                    </button>
-                    <button
-                      type="button"
-                      className={planForm.sceneId === 'power-room' ? 'active' : ''}
-                      onClick={() => changePlanScene('power-room')}
-                    >
-                      <span>瀚林1号电</span>
-                      <small>正式电房场景 / 50 个设备点</small>
-                    </button>
-                  </div>
-                  <section className="scope-overview">
-                    <div className="scope-title">
-                      <div>
-                        <span>巡检对象</span>
-                        <strong>{activePlanMap.name}</strong>
-                      </div>
-                      <b>{planForm.sceneId === 'lab-building' ? '实验楼导航联动' : '整房单车巡检'}</b>
-                    </div>
-                    {planForm.sceneId === 'lab-building' ? (
-                      <LabBuilding3DPreview mapData={activePlanMap} selectedPointIds={planForm.selectedPointIds} showPoints={false} />
-                    ) : (
-                      <PlanRoutePreview pointIds={getAreaPointIds('power-room')} mapData={activePlanMap} showRoute={false} />
-                    )}
-                    <div className="scope-metrics">
-                      <article>
-                        <span>固定点位</span>
-                        <strong>{activePlanMap.inspectionPoints.length}</strong>
-                      </article>
-                      <article>
-                        <span>巡检方式</span>
-                        <strong>{planForm.sceneId === 'lab-building' ? '环廊巡检' : '整房巡检'}</strong>
-                      </article>
-                      <article>
-                        <span>{planForm.sceneId === 'lab-building' ? '走廊基准' : '地标线'}</span>
-                        <strong>{planForm.sceneId === 'lab-building' ? '4.05 m' : '黄色线'}</strong>
-                      </article>
-                      <article>
-                        <span>默认车辆</span>
-                        <strong>{wholeRoomScope.robot}</strong>
-                      </article>
-                    </div>
-                  </section>
-
-                  <section className="plan-config-panel">
-                    <div className="config-panel-head">
-                      <span>任务参数</span>
-                      <strong>本次任务覆盖{activePlanMap.name}</strong>
-                    </div>
-                    <label>
-                      <span>任务名称</span>
-                      <input value={planForm.name} onChange={(event) => updatePlanForm('name', event.target.value)} />
-                    </label>
-                    <label>
-                      <span>执行机器人</span>
-                      <select aria-label="执行机器人" value={planForm.robot} onChange={(event) => updatePlanForm('robot', event.target.value)}>
-                        <option value="nano1">nano1</option>
-                        <option value="nano2">nano2</option>
-                        <option value="nano3">nano3</option>
-                      </select>
-                    </label>
-                    <div className="config-grid">
-                      <label>
-                        <span>开始日</span>
-                        <input type="date" value={planForm.startDate} onChange={(event) => updatePlanForm('startDate', event.target.value)} />
-                      </label>
-                      <label>
-                        <span>开始时间</span>
-                        <input type="time" value={planForm.startTime} onChange={(event) => updatePlanForm('startTime', event.target.value)} />
-                      </label>
-                    </div>
-                    <label>
-                      <span>任务优先</span>
-                      <select aria-label="任务优先级" value={planForm.priority} onChange={(event) => updatePlanForm('priority', event.target.value)}>
-                        {PLAN_PRIORITY_OPTIONS.map((priority) => (
-                          <option value={priority} key={priority}>{priority}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="scope-note">
-                      场景切换会同步更新地图、固定点位、路线与识别目标；下一步确认本次需要执行的点位。
-                    </div>
-                  </section>
-
-                  <div className="plan-step-note">
-                    当前 first_floor 导航图只覆盖实验楼左半区；本阶段先对齐左半区 2D/3D 坐标，右半区后续完整建图后再校准。
-                  </div>
-                </div>
-              )}
-
-              {planStep === 2 && (
-                <div className="plan-step-panel route-compose-step">
-                  <PlanRoutePreview
-                    pointIds={activePlanRoutePoints.map((point) => point.id)}
-                    routePoints={activePlanRoutePoints}
-                    mapData={activePlanMap}
-                    selectable
-                    onTogglePoint={togglePlanPoint}
-                    onAddFreePoint={planForm.sceneId === 'lab-building' ? addFreeRoutePoint : undefined}
-                    showSlamMap={showSlamMap}
-                    onToggleSlamMap={setShowSlamMap}
-                  />
-                  <aside className="route-compose-panel">
-                    <div className="route-order-panel">
-                      <div className="route-order-head">
-                        <div>
-                          <strong>路线顺序</strong>
-                          <span>{activePlanRoutePoints.length} 个已选点</span>
-                        </div>
-                        <button type="button" onClick={reversePlanRoute}>反向执行</button>
-                      </div>
-                      <div className="route-order-list">
-                        {activePlanRoutePoints.map((point, index) => {
-                          const pointId = point.id
-                          const arrivalDirection = getPlanPointDirection(point, planForm.pointDirections)
-
-                          return (
-                            <article key={pointId}>
-                              <span>{String(index + 1).padStart(2, '0')}</span>
-                              <div className="route-point-copy">
-                                <strong>{point.targetName}</strong>
-                                <small>{planForm.sceneId === 'lab-building' ? `x ${point.x} / y ${point.y}` : point.name}</small>
-                              </div>
-                              <label className="route-direction-control">
-                                <span>到点朝向</span>
-                                <select
-                                  aria-label={`${point.targetName}到点朝向`}
-                                  value={arrivalDirection}
-                                  onChange={(event) => updatePlanPointDirection(pointId, event.target.value)}
-                                >
-                                  {ARRIVAL_DIRECTIONS.map((direction) => (
-                                    <option key={direction.value} value={direction.value}>{direction.label}</option>
-                                  ))}
-                                </select>
-                              </label>
-                              <div className="route-order-actions">
-                                <button
-                                  type="button"
-                                  disabled={index === 0}
-                                  onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, -1) : movePlanPoint(pointId, -1))}
-                                >
-                                  上移
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={index === activePlanRoutePoints.length - 1}
-                                  onClick={() => (planForm.sceneId === 'lab-building' ? moveFreeRoutePoint(pointId, 1) : movePlanPoint(pointId, 1))}
-                                >
-                                  下移
-                                </button>
-                                <button
-                                  type="button"
-                                  className="route-delete-button"
-                                  onClick={() => (
-                                    planForm.sceneId === 'lab-building'
-                                      ? removeFreeRoutePoint(pointId)
-                                      : togglePlanPoint(pointId)
-                                  )}
-                                >
-                                  删除
-                                </button>
-                              </div>
-                            </article>
-                          )
-                        })}
-                      </div>
-                    </div>
-
-                    {planForm.sceneId !== 'lab-building' ? (
-                    <div className="fixed-point-panel free-point-panel">
-                      <div className="fixed-point-head">
-                        <strong>固定点位</strong>
-                        <span>点击点位可加入或移出路线</span>
-                      </div>
-                      <div className="fixed-point-list">
-                        {getAreaPointIds(planForm.sceneId).map((pointId) => {
-                          const point = allInspectionPointById[pointId]
-                          const checked = planForm.selectedPointIds.includes(pointId)
-
-                          return (
-                            <button
-                              type="button"
-                              className={checked ? 'selected' : ''}
-                              key={pointId}
-                              onClick={() => togglePlanPoint(pointId)}
-                            >
-                              <strong>{point.targetName}</strong>
-                              <span>{point.recognitionTargets.slice(0, 2).join(' / ')}</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                    ) : (
-                    <div className="fixed-point-panel">
-                      <div className="fixed-point-head">
-                        <strong>自由选点</strong>
-                        <span>点击左侧地图添加路线</span>
-                      </div>
-                      <div className="free-point-help">
-                        <strong>当前以 3D/SLAM 对齐后的覆盖区为准</strong>
-                        <span>只在绿色边框内点击，点位会按点击顺序下发给 nano1</span>
-                        <button type="button" onClick={clearPlanRoute}>清空路线</button>
-                      </div>
-                    </div>
-                    )}
-                  </aside>
-                  <div className="plan-step-note">
-                    左侧选择或添加巡检点，右侧可调整执行顺序与每个点的到达朝向。
-                  </div>
-                </div>
-              )}
-
-              <div className="plan-summary">
-                <strong>{planForm.name || '未命名任务'}</strong>
-                <span>{planForm.area} / {planForm.robot}</span>
-                <span>
-                  {activePlanRoutePoints.length}
-                  {planForm.sceneId === 'lab-building' ? ' 个路线点' : ' 个固定巡检点'}
-                  {' / '}{getEstimatedMinutes(activePlanRoutePoints.length)} 分钟 / {planForm.priority}优先级</span>
-              </div>
-
-              <div className="modal-actions">
-                <button type="button" onClick={closePlanModal}>取消</button>
-                {planStep > 1 && <button type="button" onClick={() => setPlanStep(planStep - 1)}>上一步</button>}
-                {planStep < 2 && <button type="button" className="primary" onClick={() => setPlanStep(planStep + 1)}>下一步</button>}
-                {planStep === 2 && <button type="submit" className="primary">{editingTaskId ? '保存修改' : '创建任务'}</button>}
-              </div>
-            </form>
-          </section>
-        </div>
+        <RealPatrolPlanModal
+          business={business}
+          vehicles={vehicles}
+          editingTask={editingTaskId ? taskList.find((task) => task.id === editingTaskId) : null}
+          onClose={closePlanModal}
+          onSaved={(savedTask) => {
+            setTaskList((currentTasks) => editingTaskId
+              ? currentTasks.map((task) => (task.id === savedTask.id ? savedTask : task))
+              : [savedTask, ...currentTasks.filter((task) => task.id !== savedTask.id)])
+            setSelectedTaskId(savedTask.id)
+            setActionNotice(`${savedTask.name} 已保存，使用真实电房、地图和正式路线。`)
+            closePlanModal()
+          }}
+        />
       )}
+
     </section>
   )
 }

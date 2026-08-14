@@ -321,6 +321,26 @@ def _route_json(route: Route) -> dict:
     }
 
 
+def _room_map_json(room_map: RoomMap) -> dict:
+    return {
+        'id': room_map.id,
+        'mapCode': room_map.map_code,
+        'roomId': room_map.room_id,
+        'name': room_map.name,
+        'version': room_map.version,
+        'vehicleId': room_map.vehicle_id,
+        'status': room_map.status,
+        'active': room_map.is_active,
+        'resolution': room_map.resolution,
+        'width': room_map.width,
+        'height': room_map.height,
+        'origin': [room_map.origin_x, room_map.origin_y, 0.0],
+        'description': room_map.description,
+        'createdAt': room_map.created_at.isoformat(sep=' ') if room_map.created_at else None,
+        'previewUrl': f'/api/business/maps/{room_map.id}/preview',
+    }
+
+
 def _robot_json(robot: Robot) -> dict:
     return {
         'id': robot.id,
@@ -512,6 +532,10 @@ def create_business_router(get_current_user: Callable) -> APIRouter:
         results = db.query(RecognitionResult).order_by(RecognitionResult.created_at.desc()).limit(200).all()
         return {
             'rooms': [_room_json(item) for item in db.query(Room).order_by(Room.id).all()],
+            'maps': [
+                _room_map_json(item)
+                for item in db.query(RoomMap).order_by(RoomMap.room_id, RoomMap.version.desc()).all()
+            ],
             'cabinetTypes': [
                 {'id': item.id, 'typeCode': item.type_code, 'name': item.name}
                 for item in db.query(CabinetType).order_by(CabinetType.id).all()

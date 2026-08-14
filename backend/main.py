@@ -38,6 +38,8 @@ try:
         InspectionTaskRoutePoint,
         RecognitionResult,
         Robot,
+        RoomMap,
+        Route,
         SystemLog,
         User,
     )
@@ -58,6 +60,7 @@ try:
         cancel_navigation_route,
         get_camera_info,
         get_lidar_info,
+        get_mapping_status,
         get_navigation_route_status,
         get_vehicle_status,
         list_vehicles,
@@ -90,6 +93,8 @@ except ImportError:
         InspectionTaskRoutePoint,
         RecognitionResult,
         Robot,
+        RoomMap,
+        Route,
         SystemLog,
         User,
     )
@@ -110,6 +115,7 @@ except ImportError:
         cancel_navigation_route,
         get_camera_info,
         get_lidar_info,
+        get_mapping_status,
         get_navigation_route_status,
         get_vehicle_status,
         list_vehicles,
@@ -231,6 +237,8 @@ class NavigationGoalRequest(BaseModel):
 class NavigationRouteRequest(BaseModel):
     vehicle_id: str | None = None
     task_id: str | None = None
+    map_id: int | None = None
+    route_id: int | None = None
     speed: float | None = None
     goals: list[NavigationGoalRequest]
 
@@ -255,6 +263,11 @@ class TaskRoutePointRequest(BaseModel):
 class InspectionTaskCreate(BaseModel):
     id: str
     sceneId: str | None = None
+    roomId: int | None = None
+    mapId: int | None = None
+    mapCode: str | None = None
+    mapVersion: int | None = None
+    routeDatabaseId: int | None = None
     name: str
     area: str | None = None
     robot: str | None = None
@@ -1100,6 +1113,31 @@ def vehicle_navigation_route(
     if not request.goals:
         raise HTTPException(status_code=400, detail='navigation route requires at least one goal')
 
+    vehicle_id = request.vehicle_id or 'nano1'
+    if request.map_id is not None:
+        room_map = db.get(RoomMap, request.map_id)
+        if room_map is None:
+            raise HTTPException(status_code=404, detail='计划关联的地图版本不存在')
+        if request.route_id is not None:
+            saved_route = db.get(Route, request.route_id)
+            if saved_route is None:
+                raise HTTPException(status_code=404, detail='计划关联的巡检路线不存在')
+            if saved_route.map_id != room_map.id:
+                raise HTTPException(status_code=409, detail='巡检路线与计划地图版本不一致')
+
+        status = get_mapping_status(vehicle_id)
+        if status.get('mode') != 'navigation':
+            raise HTTPException(status_code=409, detail='车辆当前不在导航模式，请先停止建图并启用计划地图')
+        if status.get('active_map_id') != room_map.map_code:
+            raise HTTPException(
+                status_code=409,
+                detail=f'车端当前地图不是 {room_map.name} V{room_map.version}，请先在地图管理中设为导航地图',
+            )
+        localization = status.get('localization') or {}
+        if not localization.get('valid'):
+            reason = localization.get('last_error') or '尚未获得有效定位'
+            raise HTTPException(status_code=409, detail=f'车辆定位未就绪：{reason}，请先发布初始位姿')
+
     route = {
         'task_id': request.task_id,
         'speed': request.speed,
@@ -1118,7 +1156,6 @@ def vehicle_navigation_route(
             for goal in request.goals
         ],
     }
-    vehicle_id = request.vehicle_id or 'nano1'
     try:
         response = send_navigation_route(request.vehicle_id, route)
     except HTTPException as error:

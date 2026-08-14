@@ -183,3 +183,68 @@
   .business-resource-toolbar { grid-template-columns: minmax(150px, .8fr) minmax(190px, 1fr) 120px auto; }
   .business-resource-grid.enhanced { grid-template-columns: 1fr; overflow: auto; }
 }
+
+/* 真实SLAM地图、巡检点和路线资源 */
+.route-resource-filter { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.25fr) minmax(180px, .75fr); gap: 10px; padding: 10px 12px; border: 1px solid rgba(158, 223, 234, .22); background: rgba(7, 45, 61, .78); }
+.route-resource-filter label,
+.route-resource-filter > div { min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; color: #84c1cc; font-size: 12px; }
+.route-resource-filter select { min-width: 0; height: 34px; padding: 0 9px; color: #e5fbff; border: 1px solid rgba(158, 223, 234, .24); background: rgba(4, 30, 43, .88); }
+.route-resource-filter > div { grid-template-columns: 70px minmax(0, 1fr) auto; }
+.route-resource-filter strong { color: #e7fbff; }
+.route-resource-filter em { padding: 3px 7px; border: 1px solid; font-size: 10px; font-style: normal; }
+.route-resource-filter em.online { color: #6df0bd; border-color: rgba(74, 234, 185, .42); }
+.route-resource-filter em.offline { color: #ff9ca8; border-color: rgba(255, 113, 132, .42); }
+.real-resource-layout { grid-template-columns: minmax(520px, 1.12fr) minmax(460px, .88fr); }
+.map-point-panel { min-height: 530px; }
+.slam-resource-map { min-height: 440px; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 6px; padding: 8px; overflow: hidden; border: 1px solid rgba(158, 223, 234, .2); background: #cfcfcf; }
+.slam-resource-map svg { width: 100%; height: 100%; min-height: 400px; touch-action: none; }
+.slam-resource-map.interactive svg { cursor: crosshair; }
+.slam-resource-map > span { padding: 5px; color: #b7e8ed; background: rgba(2, 26, 37, .92); font-size: 11px; text-align: center; }
+.slam-resource-map g line { stroke: #ff9d45; stroke-width: 1.8; vector-effect: non-scaling-stroke; }
+.slam-resource-map g circle { fill: #062b38; stroke: #43eed0; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.slam-resource-map g text { fill: #f4ffff; font: 700 9px Arial, sans-serif; text-anchor: middle; pointer-events: none; }
+.slam-resource-map g.muted { opacity: .28; }
+.slam-resource-empty { min-height: 380px; display: grid; place-items: center; color: #6d9ca6; border: 1px dashed rgba(158, 223, 234, .24); }
+.resource-form-tip { color: #77bec9; }
+.real-point-picker { max-height: 246px; display: grid; gap: 7px; overflow: auto; }
+.real-point-picker button { min-height: 54px; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 9px; padding: 7px 9px; color: #d9f8fb; border: 1px solid rgba(158, 223, 234, .18); background: rgba(5, 37, 51, .72); text-align: left; }
+.real-point-picker button.selected { border-color: rgba(61, 237, 204, .6); background: rgba(13, 88, 93, .62); }
+.real-point-picker button b { display: grid; place-items: center; width: 26px; height: 26px; color: #62ecd0; border: 1px solid rgba(80, 231, 210, .38); }
+.real-point-picker button span { display: grid; gap: 3px; }
+.real-point-picker button small { color: #79adb7; }
+.real-resource-lists { grid-template-columns: 1fr 1fr; }
+.formal-route-list article > em { color: #65e7cf; font-style: normal; }
+
+@media (max-width: 1360px) {
+  .real-resource-layout { grid-template-columns: 1fr; }
+  .route-resource-filter { grid-template-columns: 1fr; }
+}
+
+/* 新建真实巡检计划 */
+.real-plan-modal { width: min(1540px, calc(100vw - 70px)); }
+.real-plan-grid,
+.real-plan-confirm { min-height: 660px; display: grid; grid-template-columns: minmax(620px, 1.25fr) minmax(380px, .75fr); gap: 14px; }
+.real-plan-map-card,
+.real-plan-fields,
+.real-plan-confirm > section { min-width: 0; padding: 14px; border: 1px solid rgba(158, 223, 234, .2); background: rgba(4, 34, 48, .72); }
+.real-plan-map-card .slam-resource-map { height: 570px; }
+.real-plan-map-card .business-panel-title b.online { color: #68edc0; }
+.real-plan-map-card .business-panel-title b.offline { color: #ffad80; }
+.real-plan-fields { display: grid; align-content: start; gap: 14px; }
+.real-plan-fields label { display: grid; gap: 7px; color: #88c5cf; font-size: 12px; }
+.real-plan-fields input,
+.real-plan-fields select { min-width: 0; height: 42px; padding: 0 11px; color: #ecfdff; border: 1px solid rgba(158, 223, 234, .25); background: rgba(3, 27, 40, .9); }
+.real-plan-fields .business-primary { min-height: 44px; }
+.real-plan-confirm > section:first-child { overflow: auto; }
+.real-plan-confirm h3 { margin: 8px 0; color: #ecfdff; font-size: 22px; }
+.real-plan-confirm p { color: #88bdc7; }
+.real-plan-confirm ol { display: grid; gap: 8px; margin: 18px 0 0; padding: 0; list-style: none; }
+.real-plan-confirm li { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 10px; padding: 9px; border: 1px solid rgba(158, 223, 234, .15); background: rgba(6, 45, 59, .56); }
+.real-plan-confirm li > b { display: grid; place-items: center; width: 30px; height: 30px; color: #58ead0; border: 1px solid rgba(74, 231, 209, .35); }
+.real-plan-confirm li span { display: grid; gap: 3px; color: #e7fbff; }
+.real-plan-confirm li small { color: #75aab5; font: 11px "Courier New", monospace; }
+
+@media (max-width: 1180px) {
+  .real-plan-grid,
+  .real-plan-confirm { grid-template-columns: 1fr; overflow: auto; }
+}

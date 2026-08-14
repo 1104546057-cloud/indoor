@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 // 实验楼地图统一使用毫米（mm）作为坐标和尺寸单位。
 // 创建走廊：起点 (x1, y1)、终点 (x2, y2)、宽度 width。
 const corridor = (id, name, x1, y1, x2, y2, width = 4050) => ({ id, name, x1, y1, x2, y2, width })

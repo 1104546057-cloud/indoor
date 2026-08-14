@@ -1,5 +1,6 @@
 export const emptyBusinessOverview = Object.freeze({
   rooms: [],
+  maps: [],
   cabinetTypes: [],
   cabinets: [],
   deviceItems: [],

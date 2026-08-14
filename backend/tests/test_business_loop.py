@@ -832,6 +832,96 @@ def test_room_mapping_is_saved_versioned_and_activated(monkeypatch, tmp_path):
     listing = client.get(f'/api/business/rooms/{room_id}/maps')
     assert listing.status_code == 200
     assert listing.json()['maps'][0]['mapCode'] == map_record['mapCode']
+    overview = client.get('/api/business/overview')
+    assert any(item['id'] == map_record['id'] for item in overview.json()['maps'])
+
+
+def test_navigation_route_requires_matching_active_map_and_localization(monkeypatch, tmp_path):
+    room = business_router_module.Room(
+        room_code=f'ROOM-PLAN-{uuid4().hex[:8]}',
+        name='真实计划地图测试电房',
+    )
+    with SessionLocal() as db:
+        db.add(room)
+        db.flush()
+        room_map = business_router_module.RoomMap(
+            map_code=f'map_{uuid4().hex[:8]}',
+            room_id=room.id,
+            name='计划地图',
+            version=1,
+            vehicle_id='nano1',
+            status='active',
+            is_active=True,
+            resolution=0.05,
+            width=100,
+            height=80,
+            origin_x=-2.0,
+            origin_y=-1.0,
+            yaml_path=str(tmp_path / 'map.yaml'),
+            pgm_path=str(tmp_path / 'map.pgm'),
+            preview_path=str(tmp_path / 'map.png'),
+        )
+        db.add(room_map)
+        db.flush()
+        point = business_router_module.InspectionPoint(
+            point_code=f'POINT-{uuid4().hex[:8]}',
+            room_id=room.id,
+            map_id=room_map.id,
+            name='真实巡检点',
+            x=1.0,
+            y=2.0,
+            yaw=0.0,
+        )
+        db.add(point)
+        db.flush()
+        route = business_router_module.Route(
+            route_code=f'ROUTE-{uuid4().hex[:8]}',
+            room_id=room.id,
+            map_id=room_map.id,
+            name='真实巡检路线',
+        )
+        route.details = [business_router_module.RouteDetail(point_id=point.id, sequence=1, dwell_seconds=2)]
+        db.add(route)
+        db.commit()
+        map_id, route_id, map_code = room_map.id, route.id, room_map.map_code
+
+    dispatched = []
+    monkeypatch.setattr(main_module, 'send_navigation_route', lambda vehicle_id, payload: dispatched.append((vehicle_id, payload)) or {'navigation': {'execution_id': 'route-map-check'}})
+    monkeypatch.setattr(main_module, 'start_route_monitor', lambda *_args: True)
+    monkeypatch.setattr(main_module, 'get_mapping_status', lambda _vehicle_id: {
+        'mode': 'navigation',
+        'active_map_id': 'another-map',
+        'localization': {'valid': True},
+    })
+    payload = {
+        'vehicle_id': 'nano1',
+        'map_id': map_id,
+        'route_id': route_id,
+        'goals': [{'frame_id': 'map', 'x': 1.0, 'y': 2.0, 'yaw': 0.0}],
+    }
+    mismatch = client.post('/api/vehicle/navigation-route', json=payload)
+    assert mismatch.status_code == 409
+    assert '当前地图不是' in mismatch.json()['detail']
+    assert dispatched == []
+
+    monkeypatch.setattr(main_module, 'get_mapping_status', lambda _vehicle_id: {
+        'mode': 'navigation',
+        'active_map_id': map_code,
+        'localization': {'valid': False, 'last_error': 'AMCL covariance is too large'},
+    })
+    unlocalized = client.post('/api/vehicle/navigation-route', json=payload)
+    assert unlocalized.status_code == 409
+    assert '定位未就绪' in unlocalized.json()['detail']
+    assert dispatched == []
+
+    monkeypatch.setattr(main_module, 'get_mapping_status', lambda _vehicle_id: {
+        'mode': 'navigation',
+        'active_map_id': map_code,
+        'localization': {'valid': True},
+    })
+    accepted = client.post('/api/vehicle/navigation-route', json=payload)
+    assert accepted.status_code == 200
+    assert len(dispatched) == 1
 
 
 def test_current_vehicle_map_can_be_imported_into_room(monkeypatch, tmp_path):
